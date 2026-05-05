@@ -44,10 +44,15 @@ public struct LocalScannerFileSystem: ScannerFileSystem {
 
     public func enumerateFiles(rootPath: String) throws -> [ScannedFile] {
         let rootURL = URL(fileURLWithPath: rootPath).standardizedFileURL
+        var enumerationError: Error?
         guard let enumerator = FileManager.default.enumerator(
             at: rootURL,
             includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
-            options: [.skipsHiddenFiles]
+            options: [.skipsHiddenFiles],
+            errorHandler: { _, error in
+                enumerationError = error
+                return false
+            }
         ) else {
             throw ScannerError.folderUnavailable(rootPath)
         }
@@ -83,12 +88,17 @@ public struct LocalScannerFileSystem: ScannerFileSystem {
             )
         }
 
+        if enumerationError != nil {
+            throw ScannerError.enumerationFailed(rootPath)
+        }
+
         return files
     }
 }
 
 public enum ScannerError: Error, Sendable, Equatable {
     case folderUnavailable(String)
+    case enumerationFailed(String)
 }
 
 public struct ParsedMediaCandidate: Sendable, Equatable {
@@ -195,7 +205,39 @@ public enum FilenameParser {
 
 public struct ScanResult: Sendable, Equatable {
     public var scanRun: ScanRun
+    public var counts: ScanCounts
     public var issues: [ScanIssue]
+}
+
+public struct ScanCounts: Sendable, Equatable {
+    public var foldersScanned: Int
+    public var filesDiscovered: Int
+    public var mediaItemsCreated: Int
+    public var mediaItemsUpdated: Int
+    public var mediaFilesCreated: Int
+    public var mediaFilesUpdated: Int
+    public var filesMarkedUnavailable: Int
+    public var issuesRecorded: Int
+
+    public init(
+        foldersScanned: Int = 0,
+        filesDiscovered: Int = 0,
+        mediaItemsCreated: Int = 0,
+        mediaItemsUpdated: Int = 0,
+        mediaFilesCreated: Int = 0,
+        mediaFilesUpdated: Int = 0,
+        filesMarkedUnavailable: Int = 0,
+        issuesRecorded: Int = 0
+    ) {
+        self.foldersScanned = foldersScanned
+        self.filesDiscovered = filesDiscovered
+        self.mediaItemsCreated = mediaItemsCreated
+        self.mediaItemsUpdated = mediaItemsUpdated
+        self.mediaFilesCreated = mediaFilesCreated
+        self.mediaFilesUpdated = mediaFilesUpdated
+        self.filesMarkedUnavailable = filesMarkedUnavailable
+        self.issuesRecorded = issuesRecorded
+    }
 }
 
 public final class LibraryScanner {
@@ -226,24 +268,26 @@ public final class LibraryScanner {
         for folder in folders {
             do {
                 guard fileSystem.folderExists(at: folder.rootPath) else {
+                    let timestamp = now()
                     let issue = ScanIssue(
                         scanRunID: scanRun.id,
                         libraryFolderID: folder.id,
                         pathHash: StablePathHash.hash(folder.rootPath),
                         issueType: .folderUnavailable,
-                        message: "Library folder is unavailable"
+                        message: "Library folder is unavailable",
+                        createdAt: timestamp
                     )
                     try store.withTransaction {
                         try store.updateLibraryFolderAvailability(
                             id: folder.id,
                             isAvailable: false,
                             lastSeenAt: folder.lastSeenAt,
-                            lastScanAt: now(),
-                            updatedAt: now()
+                            lastScanAt: timestamp,
+                            updatedAt: timestamp
                         )
                         try store.saveScanIssue(issue)
                     }
-                    totals.issuesCount += 1
+                    totals.issuesRecorded += 1
                     continue
                 }
 
@@ -259,29 +303,34 @@ public final class LibraryScanner {
                     libraryFolderID: folder.id,
                     pathHash: StablePathHash.hash(folder.rootPath),
                     issueType: .filesystemError,
-                    message: "Scan failed for library folder"
+                    message: "Scan failed for library folder",
+                    createdAt: now()
                 )
                 try store.saveScanIssue(issue)
-                totals.issuesCount += 1
+                totals.issuesRecorded += 1
             }
         }
 
         scanRun.finishedAt = now()
         scanRun.status = .completed
-        scanRun.filesSeen = totals.filesSeen
-        scanRun.filesAdded = totals.filesAdded
-        scanRun.filesUpdated = totals.filesUpdated
-        scanRun.filesMissing = totals.filesMissing
-        scanRun.issuesCount = totals.issuesCount
+        scanRun.filesSeen = totals.filesDiscovered
+        scanRun.filesAdded = totals.mediaFilesCreated
+        scanRun.filesUpdated = totals.mediaFilesUpdated
+        scanRun.filesMissing = totals.filesMarkedUnavailable
+        scanRun.issuesCount = totals.issuesRecorded
         try store.saveScanRun(scanRun)
 
-        return ScanResult(scanRun: scanRun, issues: try store.fetchScanIssues(scanRunID: scanRun.id))
+        return ScanResult(
+            scanRun: scanRun,
+            counts: totals.scanCounts,
+            issues: try store.fetchScanIssues(scanRunID: scanRun.id)
+        )
     }
 
     private func process(folder: LibraryFolder, files: [ScannedFile], scanRunID: String) throws -> ScanCounters {
         let timestamp = now()
         let existingFiles = try store.fetchMediaFiles(libraryFolderID: folder.id)
-        var counters = ScanCounters(filesSeen: files.count)
+        var counters = ScanCounters(foldersScanned: 1, filesDiscovered: files.count)
         var seenRelativePaths = Set<String>()
         var newFiles: [MediaFile] = []
 
@@ -302,13 +351,13 @@ public final class LibraryScanner {
                 existing.lastSeenAt = timestamp
                 existing.updatedAt = timestamp
                 try store.saveMediaFile(existing)
-                counters.filesUpdated += 1
+                counters.mediaFilesUpdated += 1
                 continue
             }
 
-            let mediaItem = try findOrCreateMediaItem(parsed, timestamp: timestamp)
+            let mediaItemResolution = try findOrCreateMediaItem(parsed, timestamp: timestamp)
             let mediaFile = MediaFile(
-                mediaItemID: mediaItem.id,
+                mediaItemID: mediaItemResolution.item.id,
                 libraryFolderID: folder.id,
                 relativePath: scannedFile.relativePath,
                 absolutePathHash: StablePathHash.hash(scannedFile.absolutePath),
@@ -323,16 +372,19 @@ public final class LibraryScanner {
             )
             try store.saveMediaFile(mediaFile)
             newFiles.append(mediaFile)
-            counters.filesAdded += 1
+            counters.mediaFilesCreated += 1
+            if mediaItemResolution.created {
+                counters.mediaItemsCreated += 1
+            }
         }
 
         let missingFiles = existingFiles.filter { $0.isAvailable && !seenRelativePaths.contains($0.relativePath) }
         for missingFile in missingFiles {
             try store.markMediaFileUnavailable(id: missingFile.id, updatedAt: timestamp)
-            counters.filesMissing += 1
+            counters.filesMarkedUnavailable += 1
         }
 
-        counters.issuesCount += try recordRenameCandidates(
+        counters.issuesRecorded += try recordRenameCandidates(
             newFiles: newFiles,
             missingFiles: missingFiles,
             scanRunID: scanRunID,
@@ -351,11 +403,11 @@ public final class LibraryScanner {
         return counters
     }
 
-    private func findOrCreateMediaItem(_ parsed: ParsedMediaCandidate, timestamp: Date) throws -> MediaItem {
+    private func findOrCreateMediaItem(_ parsed: ParsedMediaCandidate, timestamp: Date) throws -> MediaItemResolution {
         switch parsed.mediaType {
         case .movie:
             if let existing = try store.findMovieItem(normalizedTitle: parsed.normalizedTitle, year: parsed.year) {
-                return existing
+                return MediaItemResolution(item: existing, created: false)
             }
         case .episode:
             if let episodeInfo = parsed.episodeInfo,
@@ -364,7 +416,7 @@ public final class LibraryScanner {
                    seasonNumber: episodeInfo.seasonNumber,
                    episodeNumber: episodeInfo.episodeNumber
                ) {
-                return existing
+                return MediaItemResolution(item: existing, created: false)
             }
         }
 
@@ -378,7 +430,7 @@ public final class LibraryScanner {
             updatedAt: timestamp
         )
         try store.saveMediaItem(item)
-        return item
+        return MediaItemResolution(item: item, created: true)
     }
 
     private func recordRenameCandidates(
@@ -416,18 +468,42 @@ public final class LibraryScanner {
     }
 }
 
+private struct MediaItemResolution {
+    var item: MediaItem
+    var created: Bool
+}
+
 private struct ScanCounters {
-    var filesSeen: Int = 0
-    var filesAdded: Int = 0
-    var filesUpdated: Int = 0
-    var filesMissing: Int = 0
-    var issuesCount: Int = 0
+    var foldersScanned: Int = 0
+    var filesDiscovered: Int = 0
+    var mediaItemsCreated: Int = 0
+    var mediaItemsUpdated: Int = 0
+    var mediaFilesCreated: Int = 0
+    var mediaFilesUpdated: Int = 0
+    var filesMarkedUnavailable: Int = 0
+    var issuesRecorded: Int = 0
+
+    var scanCounts: ScanCounts {
+        ScanCounts(
+            foldersScanned: foldersScanned,
+            filesDiscovered: filesDiscovered,
+            mediaItemsCreated: mediaItemsCreated,
+            mediaItemsUpdated: mediaItemsUpdated,
+            mediaFilesCreated: mediaFilesCreated,
+            mediaFilesUpdated: mediaFilesUpdated,
+            filesMarkedUnavailable: filesMarkedUnavailable,
+            issuesRecorded: issuesRecorded
+        )
+    }
 
     mutating func merge(_ other: ScanCounters) {
-        filesSeen += other.filesSeen
-        filesAdded += other.filesAdded
-        filesUpdated += other.filesUpdated
-        filesMissing += other.filesMissing
-        issuesCount += other.issuesCount
+        foldersScanned += other.foldersScanned
+        filesDiscovered += other.filesDiscovered
+        mediaItemsCreated += other.mediaItemsCreated
+        mediaItemsUpdated += other.mediaItemsUpdated
+        mediaFilesCreated += other.mediaFilesCreated
+        mediaFilesUpdated += other.mediaFilesUpdated
+        filesMarkedUnavailable += other.filesMarkedUnavailable
+        issuesRecorded += other.issuesRecorded
     }
 }
