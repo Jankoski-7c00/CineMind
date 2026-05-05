@@ -30,7 +30,7 @@ public enum PersistenceError: Error, Sendable, Equatable, CustomStringConvertibl
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 internal final class SQLiteConnection {
-    fileprivate var handle: OpaquePointer?
+    private var handle: OpaquePointer?
     private var isInTransaction = false
 
     internal init(path: String) throws {
@@ -75,32 +75,62 @@ internal final class SQLiteConnection {
         return SQLiteStatement(connection: self, statement: statement)
     }
 
-    internal func transaction<T>(_ body: () throws -> T) throws -> T {
-        if isInTransaction {
-            return try body()
+    internal func begin() throws {
+        guard !isInTransaction else {
+            throw PersistenceError.transactionFailed("transaction already active")
         }
-
         try execute("BEGIN IMMEDIATE TRANSACTION")
         isInTransaction = true
+    }
 
+    internal func commit() throws {
+        guard isInTransaction else {
+            throw PersistenceError.transactionFailed("no active transaction")
+        }
         do {
-            let value = try body()
             try execute("COMMIT")
             isInTransaction = false
-            return value
         } catch {
-            do {
-                try execute("ROLLBACK")
-            } catch {
-                isInTransaction = false
-                throw PersistenceError.transactionFailed(error.localizedDescription)
-            }
             isInTransaction = false
             throw error
         }
     }
 
-    fileprivate var errorMessage: String {
+    internal func rollback() throws {
+        guard isInTransaction else {
+            throw PersistenceError.transactionFailed("no active transaction")
+        }
+        do {
+            try execute("ROLLBACK")
+            isInTransaction = false
+        } catch {
+            isInTransaction = false
+            throw error
+        }
+    }
+
+    internal func transaction<T>(_ body: () throws -> T) throws -> T {
+        if isInTransaction {
+            return try body()
+        }
+
+        try begin()
+
+        do {
+            let value = try body()
+            try commit()
+            return value
+        } catch {
+            do {
+                try rollback()
+            } catch let rollbackError {
+                throw PersistenceError.transactionFailed(rollbackError.localizedDescription)
+            }
+            throw error
+        }
+    }
+
+    internal var errorMessage: String {
         guard let handle else {
             return "sqlite connection is closed"
         }

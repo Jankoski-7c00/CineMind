@@ -16,6 +16,48 @@ public final class CineMindStore {
     public func withTransaction<T>(_ body: () throws -> T) throws -> T {
         try connection.transaction(body)
     }
+}
+
+// MARK: - Migration Diagnostics
+
+extension CineMindStore {
+    internal func schemaTableNames() throws -> [String] {
+        let statement = try connection.prepare("""
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY name ASC
+            """)
+
+        var names: [String] = []
+        while try statement.step() {
+            names.append(try requiredString(statement, 0))
+        }
+        return names
+    }
+
+    internal func appliedMigrationVersions() throws -> [Int] {
+        let statement = try connection.prepare("""
+            SELECT version
+            FROM schema_migrations
+            ORDER BY version ASC
+            """)
+
+        var versions: [Int] = []
+        while try statement.step() {
+            versions.append(try requiredInt(statement, 0))
+        }
+        return versions
+    }
+}
+
+// MARK: - Library
+
+extension CineMindStore {
+    public func createOrLoadLibrary(name: String = "CineMind Library") throws -> Library {
+        try ensureLibrary(name: name)
+    }
 
     public func ensureLibrary(name: String = "CineMind Library") throws -> Library {
         if let existing = try fetchLibrary() {
@@ -42,6 +84,22 @@ public final class CineMindStore {
         return try mapLibrary(statement)
     }
 
+    public func fetchLibrary(id: LibraryID) throws -> Library? {
+        let statement = try connection.prepare("""
+            SELECT id, name, created_at, updated_at
+            FROM libraries
+            WHERE id = ?
+            LIMIT 1
+            """)
+        try statement.bind(id, at: 1)
+
+        guard try statement.step() else {
+            return nil
+        }
+
+        return try mapLibrary(statement)
+    }
+
     public func saveLibrary(_ library: Library) throws {
         let statement = try connection.prepare("""
             INSERT INTO libraries (id, name, created_at, updated_at)
@@ -55,6 +113,14 @@ public final class CineMindStore {
         try statement.bind(timestamp(library.createdAt), at: 3)
         try statement.bind(timestamp(library.updatedAt), at: 4)
         _ = try statement.step()
+    }
+}
+
+// MARK: - LibraryFolder
+
+extension CineMindStore {
+    public func addLibraryFolder(_ folder: LibraryFolder) throws {
+        try saveLibraryFolder(folder)
     }
 
     public func saveLibraryFolder(_ folder: LibraryFolder) throws {
@@ -87,7 +153,7 @@ public final class CineMindStore {
         _ = try statement.step()
     }
 
-    public func fetchLibraryFolders(libraryID: String) throws -> [LibraryFolder] {
+    public func fetchLibraryFolders(libraryID: LibraryID) throws -> [LibraryFolder] {
         let statement = try connection.prepare("""
             SELECT id, library_id, display_name, root_path, access_bookmark,
                    is_available, last_seen_at, last_scan_at, created_at, updated_at
@@ -105,7 +171,7 @@ public final class CineMindStore {
     }
 
     public func updateLibraryFolderAvailability(
-        id: String,
+        id: LibraryFolderID,
         isAvailable: Bool,
         lastSeenAt: Date?,
         lastScanAt: Date?,
@@ -126,7 +192,11 @@ public final class CineMindStore {
         try statement.bind(id, at: 5)
         _ = try statement.step()
     }
+}
 
+// MARK: - MediaItem
+
+extension CineMindStore {
     public func saveMediaItem(_ item: MediaItem) throws {
         let statement = try connection.prepare("""
             INSERT INTO media_items (
@@ -150,12 +220,14 @@ public final class CineMindStore {
         _ = try statement.step()
     }
 
-    public func fetchMediaItem(id: String) throws -> MediaItem? {
+    public func fetchMediaItem(id: MediaItemID) throws -> MediaItem? {
         let statement = try connection.prepare(mediaItemSelectSQL + " WHERE id = ?")
         try statement.bind(id, at: 1)
+
         guard try statement.step() else {
             return nil
         }
+
         return try mapMediaItem(statement)
     }
 
@@ -190,6 +262,7 @@ public final class CineMindStore {
         guard try statement.step() else {
             return nil
         }
+
         return try mapMediaItem(statement)
     }
 
@@ -213,9 +286,14 @@ public final class CineMindStore {
         guard try statement.step() else {
             return nil
         }
+
         return try mapMediaItem(statement)
     }
+}
 
+// MARK: - MediaFile
+
+extension CineMindStore {
     public func saveMediaFile(_ file: MediaFile) throws {
         let statement = try connection.prepare("""
             INSERT INTO media_files (
@@ -241,7 +319,10 @@ public final class CineMindStore {
         _ = try statement.step()
     }
 
-    public func fetchMediaFile(libraryFolderID: String, relativePath: String) throws -> MediaFile? {
+    public func fetchMediaFile(
+        libraryFolderID: LibraryFolderID,
+        relativePath: String
+    ) throws -> MediaFile? {
         let statement = try connection.prepare(mediaFileSelectSQL + """
              WHERE library_folder_id = ? AND relative_path = ?
             LIMIT 1
@@ -252,10 +333,11 @@ public final class CineMindStore {
         guard try statement.step() else {
             return nil
         }
+
         return try mapMediaFile(statement)
     }
 
-    public func fetchMediaFiles(libraryFolderID: String) throws -> [MediaFile] {
+    public func fetchMediaFiles(libraryFolderID: LibraryFolderID) throws -> [MediaFile] {
         let statement = try connection.prepare(mediaFileSelectSQL + """
              WHERE library_folder_id = ?
             ORDER BY relative_path ASC
@@ -269,7 +351,7 @@ public final class CineMindStore {
         return files
     }
 
-    public func fetchMediaFiles(mediaItemID: String) throws -> [MediaFile] {
+    public func fetchMediaFiles(mediaItemID: MediaItemID) throws -> [MediaFile] {
         let statement = try connection.prepare(mediaFileSelectSQL + """
              WHERE media_item_id = ?
             ORDER BY relative_path ASC
@@ -283,7 +365,7 @@ public final class CineMindStore {
         return files
     }
 
-    public func markMediaFileUnavailable(id: String, updatedAt: Date = Date()) throws {
+    public func markMediaFileUnavailable(id: MediaFileID, updatedAt: Date = Date()) throws {
         let statement = try connection.prepare("""
             UPDATE media_files
             SET is_available = 0,
@@ -292,6 +374,48 @@ public final class CineMindStore {
             """)
         try statement.bind(timestamp(updatedAt), at: 1)
         try statement.bind(id, at: 2)
+        _ = try statement.step()
+    }
+}
+
+// MARK: - Scan
+
+extension CineMindStore {
+    public func createScanRun(libraryID: LibraryID, startedAt: Date = Date()) throws -> ScanRun {
+        let run = ScanRun(libraryID: libraryID, startedAt: startedAt)
+        try saveScanRun(run)
+        return run
+    }
+
+    public func finishScanRun(
+        id: ScanRunID,
+        finishedAt: Date = Date(),
+        status: ScanRunStatus,
+        filesSeen: Int,
+        filesAdded: Int,
+        filesUpdated: Int,
+        filesMissing: Int,
+        issuesCount: Int
+    ) throws {
+        let statement = try connection.prepare("""
+            UPDATE scan_runs
+            SET finished_at = ?,
+                status = ?,
+                files_seen = ?,
+                files_added = ?,
+                files_updated = ?,
+                files_missing = ?,
+                issues_count = ?
+            WHERE id = ?
+            """)
+        try statement.bind(timestamp(finishedAt), at: 1)
+        try statement.bind(status.rawValue, at: 2)
+        try statement.bind(filesSeen, at: 3)
+        try statement.bind(filesAdded, at: 4)
+        try statement.bind(filesUpdated, at: 5)
+        try statement.bind(filesMissing, at: 6)
+        try statement.bind(issuesCount, at: 7)
+        try statement.bind(id, at: 8)
         _ = try statement.step()
     }
 
@@ -324,14 +448,19 @@ public final class CineMindStore {
         _ = try statement.step()
     }
 
-    public func fetchScanRun(id: String) throws -> ScanRun? {
+    public func fetchScanRun(id: ScanRunID) throws -> ScanRun? {
         let statement = try connection.prepare(scanRunSelectSQL + " WHERE id = ?")
         try statement.bind(id, at: 1)
 
         guard try statement.step() else {
             return nil
         }
+
         return try mapScanRun(statement)
+    }
+
+    public func recordScanIssue(_ issue: ScanIssue) throws {
+        try saveScanIssue(issue)
     }
 
     public func saveScanIssue(_ issue: ScanIssue) throws {
@@ -358,7 +487,7 @@ public final class CineMindStore {
         _ = try statement.step()
     }
 
-    public func fetchScanIssues(scanRunID: String) throws -> [ScanIssue] {
+    public func fetchScanIssues(scanRunID: ScanRunID) throws -> [ScanIssue] {
         let statement = try connection.prepare("""
             SELECT id, scan_run_id, library_folder_id, path_hash,
                    issue_type, message, created_at
@@ -374,7 +503,11 @@ public final class CineMindStore {
         }
         return issues
     }
+}
 
+// MARK: - Mapping
+
+extension CineMindStore {
     private func bindMediaItem(_ item: MediaItem, to statement: SQLiteStatement) throws {
         try statement.bind(item.id, at: 1)
         try statement.bind(item.mediaType.rawValue, at: 2)

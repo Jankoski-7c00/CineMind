@@ -20,7 +20,7 @@ internal enum SQLiteMigrator {
                     try connection.execute(statement)
                 }
                 let insert = try connection.prepare("""
-                    INSERT INTO schema_migrations (version, applied_at)
+                    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
                     VALUES (?, ?)
                     """)
                 try insert.bind(1, at: 1)
@@ -45,7 +45,7 @@ internal enum SQLiteMigrator {
 
     private static let version1Statements = [
         """
-        CREATE TABLE libraries (
+        CREATE TABLE IF NOT EXISTS libraries (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             created_at REAL NOT NULL,
@@ -53,7 +53,7 @@ internal enum SQLiteMigrator {
         )
         """,
         """
-        CREATE TABLE library_folders (
+        CREATE TABLE IF NOT EXISTS library_folders (
             id TEXT PRIMARY KEY,
             library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE RESTRICT,
             display_name TEXT NOT NULL,
@@ -67,11 +67,11 @@ internal enum SQLiteMigrator {
         )
         """,
         """
-        CREATE INDEX idx_library_folders_library_id
+        CREATE INDEX IF NOT EXISTS idx_library_folders_library_id
         ON library_folders(library_id)
         """,
         """
-        CREATE TABLE media_items (
+        CREATE TABLE IF NOT EXISTS media_items (
             id TEXT PRIMARY KEY,
             media_type TEXT NOT NULL,
             title TEXT NOT NULL,
@@ -86,11 +86,11 @@ internal enum SQLiteMigrator {
         )
         """,
         """
-        CREATE INDEX idx_media_items_identity
+        CREATE INDEX IF NOT EXISTS idx_media_items_identity
         ON media_items(media_type, normalized_title, year, season_number, episode_number)
         """,
         """
-        CREATE TABLE media_files (
+        CREATE TABLE IF NOT EXISTS media_files (
             id TEXT PRIMARY KEY,
             media_item_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE RESTRICT,
             library_folder_id TEXT NOT NULL REFERENCES library_folders(id) ON DELETE RESTRICT,
@@ -108,11 +108,11 @@ internal enum SQLiteMigrator {
         )
         """,
         """
-        CREATE INDEX idx_media_files_media_item_id
+        CREATE INDEX IF NOT EXISTS idx_media_files_media_item_id
         ON media_files(media_item_id)
         """,
         """
-        CREATE TABLE scan_runs (
+        CREATE TABLE IF NOT EXISTS scan_runs (
             id TEXT PRIMARY KEY,
             library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE RESTRICT,
             started_at REAL NOT NULL,
@@ -126,7 +126,7 @@ internal enum SQLiteMigrator {
         )
         """,
         """
-        CREATE TABLE scan_issues (
+        CREATE TABLE IF NOT EXISTS scan_issues (
             id TEXT PRIMARY KEY,
             scan_run_id TEXT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
             library_folder_id TEXT REFERENCES library_folders(id) ON DELETE SET NULL,
@@ -137,7 +137,7 @@ internal enum SQLiteMigrator {
         )
         """,
         """
-        CREATE INDEX idx_scan_issues_scan_run_id
+        CREATE INDEX IF NOT EXISTS idx_scan_issues_scan_run_id
         ON scan_issues(scan_run_id)
         """
     ]
