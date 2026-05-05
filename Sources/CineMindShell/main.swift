@@ -3,12 +3,16 @@ import Persistence
 import Scanner
 import Shared
 
-let linkedModules = [
-    CineMindBuildInfo.productName,
-    CineMindBuildInfo.phaseName,
-    String(describing: Library.self),
-    String(describing: CineMindStore.self),
-    String(describing: LibraryScanner.self)
+let linkedTypes: [Any.Type] = [
+    Library.self,
+    CineMindStore.self,
+    LibraryScanner.self
 ]
+_ = linkedTypes
 
-print(linkedModules.joined(separator: " | "))
+let availableModules = ["Shared", "Domain", "Persistence", "Scanner"]
+
+print(CineMindBuildInfo.productName)
+print(CineMindBuildInfo.phaseName)
+print("Available modules: \(availableModules.joined(separator: ", "))")
+print("Phase 1 foundation ready")
