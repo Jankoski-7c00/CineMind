@@ -1,0 +1,144 @@
+import Foundation
+
+internal enum SQLiteMigrator {
+    internal static func migrate(_ connection: SQLiteConnection) throws {
+        try connection.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at REAL NOT NULL
+            )
+            """)
+
+        let applied = try appliedVersions(connection)
+        guard !applied.contains(1) else {
+            return
+        }
+
+        do {
+            try connection.transaction {
+                for statement in version1Statements {
+                    try connection.execute(statement)
+                }
+                let insert = try connection.prepare("""
+                    INSERT INTO schema_migrations (version, applied_at)
+                    VALUES (?, ?)
+                    """)
+                try insert.bind(1, at: 1)
+                try insert.bind(Date().timeIntervalSince1970, at: 2)
+                _ = try insert.step()
+            }
+        } catch {
+            throw PersistenceError.migrationFailed(error.localizedDescription)
+        }
+    }
+
+    private static func appliedVersions(_ connection: SQLiteConnection) throws -> Set<Int> {
+        let statement = try connection.prepare("SELECT version FROM schema_migrations")
+        var versions = Set<Int>()
+        while try statement.step() {
+            if let version = statement.int(at: 0) {
+                versions.insert(version)
+            }
+        }
+        return versions
+    }
+
+    private static let version1Statements = [
+        """
+        CREATE TABLE libraries (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE library_folders (
+            id TEXT PRIMARY KEY,
+            library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE RESTRICT,
+            display_name TEXT NOT NULL,
+            root_path TEXT NOT NULL,
+            access_bookmark BLOB,
+            is_available INTEGER NOT NULL,
+            last_seen_at REAL,
+            last_scan_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_library_folders_library_id
+        ON library_folders(library_id)
+        """,
+        """
+        CREATE TABLE media_items (
+            id TEXT PRIMARY KEY,
+            media_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            normalized_title TEXT NOT NULL,
+            year INTEGER,
+            series_title TEXT,
+            season_number INTEGER,
+            episode_number INTEGER,
+            episode_title TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_media_items_identity
+        ON media_items(media_type, normalized_title, year, season_number, episode_number)
+        """,
+        """
+        CREATE TABLE media_files (
+            id TEXT PRIMARY KEY,
+            media_item_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE RESTRICT,
+            library_folder_id TEXT NOT NULL REFERENCES library_folders(id) ON DELETE RESTRICT,
+            relative_path TEXT NOT NULL,
+            absolute_path_hash TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_extension TEXT NOT NULL,
+            file_size_bytes INTEGER NOT NULL,
+            modified_at REAL,
+            is_available INTEGER NOT NULL,
+            last_seen_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            UNIQUE(library_folder_id, relative_path)
+        )
+        """,
+        """
+        CREATE INDEX idx_media_files_media_item_id
+        ON media_files(media_item_id)
+        """,
+        """
+        CREATE TABLE scan_runs (
+            id TEXT PRIMARY KEY,
+            library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE RESTRICT,
+            started_at REAL NOT NULL,
+            finished_at REAL,
+            status TEXT NOT NULL,
+            files_seen INTEGER NOT NULL,
+            files_added INTEGER NOT NULL,
+            files_updated INTEGER NOT NULL,
+            files_missing INTEGER NOT NULL,
+            issues_count INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE scan_issues (
+            id TEXT PRIMARY KEY,
+            scan_run_id TEXT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+            library_folder_id TEXT REFERENCES library_folders(id) ON DELETE SET NULL,
+            path_hash TEXT,
+            issue_type TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_scan_issues_scan_run_id
+        ON scan_issues(scan_run_id)
+        """
+    ]
+}
