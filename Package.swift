@@ -33,7 +33,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "CineMindShell",
-            dependencies: ["Shared", "Domain", "Persistence", "Scanner"]
+            dependencies: ["Domain", "Persistence"]
         ),
         .testTarget(
             name: "DomainTests",

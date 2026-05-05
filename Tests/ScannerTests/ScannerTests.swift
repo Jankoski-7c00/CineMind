@@ -216,6 +216,7 @@ final class ScannerTests: XCTestCase {
         let second = try context.scanner.scanLibrary(libraryID: context.library.id)
 
         let files = try context.store.fetchMediaFiles(libraryFolderID: context.folder.id)
+        XCTAssertEqual(second.scanRun.status, .completed)
         XCTAssertEqual(second.scanRun.filesMissing, 0)
         XCTAssertScanCounts(
             second.counts,
@@ -243,6 +244,7 @@ final class ScannerTests: XCTestCase {
         let second = try context.scanner.scanLibrary(libraryID: context.library.id)
 
         let files = try context.store.fetchMediaFiles(libraryFolderID: context.folder.id)
+        XCTAssertEqual(second.scanRun.status, .completed)
         XCTAssertEqual(second.scanRun.filesMissing, 0)
         XCTAssertScanCounts(
             second.counts,
@@ -258,6 +260,43 @@ final class ScannerTests: XCTestCase {
         XCTAssertTrue(second.issues.contains { $0.issueType == .filesystemError })
         XCTAssertEqual(files.count, 1)
         XCTAssertTrue(files[0].isAvailable)
+    }
+
+    func testUnexpectedScanFailureFinishesScanRunAsFailed() throws {
+        let context = try makeContext()
+        context.fileSystem.unexpectedFailureRoots.insert(context.folder.rootPath)
+
+        XCTAssertThrowsError(
+            try context.scanner.scanLibrary(libraryID: context.library.id)
+        ) { error in
+            XCTAssertEqual(error as? UnexpectedScanError, .injected)
+        }
+
+        let runs = try context.store.fetchScanRuns(libraryID: context.library.id)
+        let run = try XCTUnwrap(runs.first)
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(run.status, .failed)
+        XCTAssertNotEqual(run.status, .running)
+        XCTAssertNotNil(run.finishedAt)
+        XCTAssertEqual(run.issuesCount, 0)
+        XCTAssertTrue(try context.store.fetchScanIssues(scanRunID: run.id).isEmpty)
+    }
+
+    func testPersistenceErrorDuringScanIsNotRecordedAsFilesystemIssue() throws {
+        let context = try makeContext()
+        context.fileSystem.persistenceFailureRoots.insert(context.folder.rootPath)
+
+        XCTAssertThrowsError(
+            try context.scanner.scanLibrary(libraryID: context.library.id)
+        ) { error in
+            XCTAssertEqual(error as? PersistenceError, .stepFailed("injected persistence failure"))
+        }
+
+        let runs = try context.store.fetchScanRuns(libraryID: context.library.id)
+        let run = try XCTUnwrap(runs.first)
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(run.status, .failed)
+        XCTAssertTrue(try context.store.fetchScanIssues(scanRunID: run.id).isEmpty)
     }
 
     func testUnsupportedExtensionsAreIgnored() throws {
@@ -328,21 +367,29 @@ private final class FakeFileSystem: ScannerFileSystem {
     var existingFolders = Set<String>()
     var filesByRoot: [String: [ScannedFile]] = [:]
     var failingRoots = Set<String>()
+    var unexpectedFailureRoots = Set<String>()
+    var persistenceFailureRoots = Set<String>()
 
     func folderExists(at path: String) -> Bool {
         existingFolders.contains(path)
     }
 
     func enumerateFiles(rootPath: String) throws -> [ScannedFile] {
+        if persistenceFailureRoots.contains(rootPath) {
+            throw PersistenceError.stepFailed("injected persistence failure")
+        }
+        if unexpectedFailureRoots.contains(rootPath) {
+            throw UnexpectedScanError.injected
+        }
         if failingRoots.contains(rootPath) {
-            throw FakeFileSystemError.enumerationFailed
+            throw ScannerError.enumerationFailed(rootPath)
         }
         return filesByRoot[rootPath] ?? []
     }
 }
 
-private enum FakeFileSystemError: Error {
-    case enumerationFailed
+private enum UnexpectedScanError: Error, Equatable {
+    case injected
 }
 
 private func XCTAssertScanCounts(

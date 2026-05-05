@@ -30,15 +30,20 @@ public enum PersistenceError: Error, Sendable, Equatable, CustomStringConvertibl
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 internal final class SQLiteConnection {
+    internal enum OpenMode {
+        case readWriteCreate
+        case readOnly
+    }
+
     private var handle: OpaquePointer?
     private var isInTransaction = false
 
-    internal init(path: String) throws {
+    internal init(path: String, mode: OpenMode = .readWriteCreate) throws {
         var opened: OpaquePointer?
         let result = sqlite3_open_v2(
             path,
             &opened,
-            SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+            mode.openFlags,
             nil
         )
 
@@ -52,7 +57,9 @@ internal final class SQLiteConnection {
 
         handle = opened
         try execute("PRAGMA foreign_keys = ON")
-        try execute("PRAGMA journal_mode = WAL")
+        if mode == .readWriteCreate {
+            try execute("PRAGMA journal_mode = WAL")
+        }
     }
 
     deinit {
@@ -135,6 +142,17 @@ internal final class SQLiteConnection {
             return "sqlite connection is closed"
         }
         return String(cString: sqlite3_errmsg(handle))
+    }
+}
+
+extension SQLiteConnection.OpenMode {
+    fileprivate var openFlags: Int32 {
+        switch self {
+        case .readWriteCreate:
+            SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        case .readOnly:
+            SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+        }
     }
 }
 

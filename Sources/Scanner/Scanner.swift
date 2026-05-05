@@ -60,32 +60,36 @@ public struct LocalScannerFileSystem: ScannerFileSystem {
         let rootPrefix = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
         var files: [ScannedFile] = []
 
-        for case let fileURL as URL in enumerator {
-            let values = try fileURL.resourceValues(forKeys: [
-                .isRegularFileKey,
-                .fileSizeKey,
-                .contentModificationDateKey
-            ])
-            guard values.isRegularFile == true else {
-                continue
-            }
+        do {
+            for case let fileURL as URL in enumerator {
+                let values = try fileURL.resourceValues(forKeys: [
+                    .isRegularFileKey,
+                    .fileSizeKey,
+                    .contentModificationDateKey
+                ])
+                guard values.isRegularFile == true else {
+                    continue
+                }
 
-            let absolutePath = fileURL.standardizedFileURL.path
-            guard absolutePath.hasPrefix(rootPrefix) else {
-                continue
-            }
+                let absolutePath = fileURL.standardizedFileURL.path
+                guard absolutePath.hasPrefix(rootPrefix) else {
+                    continue
+                }
 
-            let relativePath = String(absolutePath.dropFirst(rootPrefix.count))
-            files.append(
-                ScannedFile(
-                    relativePath: relativePath,
-                    absolutePath: absolutePath,
-                    fileName: fileURL.lastPathComponent,
-                    fileExtension: fileURL.pathExtension,
-                    fileSizeBytes: Int64(values.fileSize ?? 0),
-                    modifiedAt: values.contentModificationDate
+                let relativePath = String(absolutePath.dropFirst(rootPrefix.count))
+                files.append(
+                    ScannedFile(
+                        relativePath: relativePath,
+                        absolutePath: absolutePath,
+                        fileName: fileURL.lastPathComponent,
+                        fileExtension: fileURL.pathExtension,
+                        fileSizeBytes: Int64(values.fileSize ?? 0),
+                        modifiedAt: values.contentModificationDate
+                    )
                 )
-            )
+            }
+        } catch {
+            throw ScannerError.enumerationFailed(rootPath)
         }
 
         if enumerationError != nil {
@@ -262,11 +266,12 @@ public final class LibraryScanner {
         var scanRun = ScanRun(libraryID: libraryID, startedAt: now())
         try store.saveScanRun(scanRun)
 
-        let folders = try store.fetchLibraryFolders(libraryID: libraryID)
         var totals = ScanCounters()
 
-        for folder in folders {
-            do {
+        do {
+            let folders = try store.fetchLibraryFolders(libraryID: libraryID)
+
+            for folder in folders {
                 guard fileSystem.folderExists(at: folder.rootPath) else {
                     let timestamp = now()
                     let issue = ScanIssue(
@@ -291,40 +296,41 @@ public final class LibraryScanner {
                     continue
                 }
 
-                let files = try fileSystem.enumerateFiles(rootPath: folder.rootPath)
+                let files: [ScannedFile]
+                do {
+                    files = try fileSystem.enumerateFiles(rootPath: folder.rootPath)
+                } catch let error as ScannerError {
+                    let issue = ScanIssue(
+                        scanRunID: scanRun.id,
+                        libraryFolderID: folder.id,
+                        pathHash: StablePathHash.hash(folder.rootPath),
+                        issueType: scanIssueType(for: error),
+                        message: scanIssueMessage(for: error),
+                        createdAt: now()
+                    )
+                    try store.saveScanIssue(issue)
+                    totals.issuesRecorded += 1
+                    continue
+                }
+
                 let mediaFiles = files.filter { supportedExtensions.contains($0.fileExtension.lowercased()) }
                 let counters = try store.withTransaction {
                     try process(folder: folder, files: mediaFiles, scanRunID: scanRun.id)
                 }
                 totals.merge(counters)
-            } catch {
-                let issue = ScanIssue(
-                    scanRunID: scanRun.id,
-                    libraryFolderID: folder.id,
-                    pathHash: StablePathHash.hash(folder.rootPath),
-                    issueType: .filesystemError,
-                    message: "Scan failed for library folder",
-                    createdAt: now()
-                )
-                try store.saveScanIssue(issue)
-                totals.issuesRecorded += 1
             }
+
+            try finishScanRun(&scanRun, status: .completed, totals: totals)
+
+            return ScanResult(
+                scanRun: scanRun,
+                counts: totals.scanCounts,
+                issues: try store.fetchScanIssues(scanRunID: scanRun.id)
+            )
+        } catch {
+            try? finishScanRun(&scanRun, status: .failed, totals: totals)
+            throw error
         }
-
-        scanRun.finishedAt = now()
-        scanRun.status = .completed
-        scanRun.filesSeen = totals.filesDiscovered
-        scanRun.filesAdded = totals.mediaFilesCreated
-        scanRun.filesUpdated = totals.mediaFilesUpdated
-        scanRun.filesMissing = totals.filesMarkedUnavailable
-        scanRun.issuesCount = totals.issuesRecorded
-        try store.saveScanRun(scanRun)
-
-        return ScanResult(
-            scanRun: scanRun,
-            counts: totals.scanCounts,
-            issues: try store.fetchScanIssues(scanRunID: scanRun.id)
-        )
     }
 
     private func process(folder: LibraryFolder, files: [ScannedFile], scanRunID: String) throws -> ScanCounters {
@@ -465,6 +471,39 @@ public final class LibraryScanner {
         }
 
         return recorded
+    }
+
+    private func finishScanRun(
+        _ scanRun: inout ScanRun,
+        status: ScanRunStatus,
+        totals: ScanCounters
+    ) throws {
+        scanRun.finishedAt = now()
+        scanRun.status = status
+        scanRun.filesSeen = totals.filesDiscovered
+        scanRun.filesAdded = totals.mediaFilesCreated
+        scanRun.filesUpdated = totals.mediaFilesUpdated
+        scanRun.filesMissing = totals.filesMarkedUnavailable
+        scanRun.issuesCount = totals.issuesRecorded
+        try store.saveScanRun(scanRun)
+    }
+
+    private func scanIssueMessage(for error: ScannerError) -> String {
+        switch error {
+        case .folderUnavailable:
+            "Library folder is unavailable"
+        case .enumerationFailed:
+            "Scan failed for library folder"
+        }
+    }
+
+    private func scanIssueType(for error: ScannerError) -> ScanIssueType {
+        switch error {
+        case .folderUnavailable:
+            .folderUnavailable
+        case .enumerationFailed:
+            .filesystemError
+        }
     }
 }
 

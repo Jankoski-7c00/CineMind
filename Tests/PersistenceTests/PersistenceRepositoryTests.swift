@@ -55,6 +55,121 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertEqual(try reopened.appliedMigrationVersions(), [1])
     }
 
+    func testLibraryCoreRecordsPersistAcrossStoreReopen() throws {
+        let libraryID: LibraryID
+        let folderID: LibraryFolderID
+        let itemID: MediaItemID
+        let fileID: MediaFileID
+        let scanRunID: ScanRunID
+        let relativePath = "Arrival (2016).mkv"
+
+        do {
+            let store = try makeStore()
+            let library = try store.createOrLoadLibrary(name: "Local")
+            let folder = LibraryFolder(
+                libraryID: library.id,
+                displayName: "Movies",
+                rootPath: "/media/movies"
+            )
+            let item = MediaItem(mediaType: .movie, title: "Arrival", year: 2016)
+            let file = mediaFile(
+                itemID: item.id,
+                folderID: folder.id,
+                relativePath: relativePath,
+                absolutePathHash: "arrival-path-hash",
+                fileSizeBytes: 1024
+            )
+            let scanRun = try store.createScanRun(
+                libraryID: library.id,
+                startedAt: Date(timeIntervalSince1970: 700)
+            )
+
+            try store.addLibraryFolder(folder)
+            try store.saveMediaItem(item)
+            try store.saveMediaFile(file)
+            try store.finishScanRun(
+                id: scanRun.id,
+                finishedAt: Date(timeIntervalSince1970: 800),
+                status: .completed,
+                filesSeen: 1,
+                filesAdded: 1,
+                filesUpdated: 0,
+                filesMissing: 0,
+                issuesCount: 0
+            )
+
+            libraryID = library.id
+            folderID = folder.id
+            itemID = item.id
+            fileID = file.id
+            scanRunID = scanRun.id
+        }
+
+        let reopened = try makeStore()
+        let library = try XCTUnwrap(reopened.fetchLibrary(id: libraryID))
+        let folders = try reopened.fetchLibraryFolders(libraryID: libraryID)
+        let item = try XCTUnwrap(reopened.fetchMediaItem(id: itemID))
+        let file = try XCTUnwrap(
+            reopened.fetchMediaFile(
+                libraryFolderID: folderID,
+                relativePath: relativePath
+            )
+        )
+        let scanRun = try XCTUnwrap(reopened.fetchScanRun(id: scanRunID))
+
+        XCTAssertEqual(library.id, libraryID)
+        XCTAssertEqual(library.name, "Local")
+        XCTAssertEqual(folders.map(\.id), [folderID])
+        XCTAssertEqual(folders[0].rootPath, "/media/movies")
+        XCTAssertEqual(item.id, itemID)
+        XCTAssertEqual(item.title, "Arrival")
+        XCTAssertEqual(file.id, fileID)
+        XCTAssertEqual(file.mediaItemID, itemID)
+        XCTAssertTrue(file.isAvailable)
+        XCTAssertEqual(scanRun.id, scanRunID)
+        XCTAssertEqual(scanRun.status, .completed)
+        XCTAssertEqual(scanRun.filesSeen, 1)
+        XCTAssertEqual(scanRun.filesAdded, 1)
+    }
+
+    func testReadOnlyStoreCanReadExistingRecordsButCannotWrite() throws {
+        let libraryID: LibraryID
+        let itemID: MediaItemID
+
+        do {
+            let store = try makeStore()
+            let library = try store.createOrLoadLibrary(name: "Local")
+            let folder = LibraryFolder(
+                libraryID: library.id,
+                displayName: "Movies",
+                rootPath: "/media/movies"
+            )
+            let item = MediaItem(mediaType: .movie, title: "Arrival", year: 2016)
+            let file = mediaFile(
+                itemID: item.id,
+                folderID: folder.id,
+                relativePath: "Arrival (2016).mkv",
+                absolutePathHash: "arrival-path-hash",
+                fileSizeBytes: 1024
+            )
+
+            try store.addLibraryFolder(folder)
+            try store.saveMediaItem(item)
+            try store.saveMediaFile(file)
+
+            libraryID = library.id
+            itemID = item.id
+        }
+
+        let readOnly = try CineMindStore(readOnlyPath: databaseURL.path)
+        XCTAssertEqual(try readOnly.fetchLibrary(id: libraryID)?.name, "Local")
+        XCTAssertEqual(try readOnly.fetchMediaItem(id: itemID)?.title, "Arrival")
+        XCTAssertEqual(try readOnly.fetchMediaFiles(mediaItemID: itemID).count, 1)
+        XCTAssertThrowsError(
+            try readOnly.saveMediaItem(MediaItem(mediaType: .movie, title: "Moon", year: 2009))
+        )
+    }
+
     func testSingleMVPLibraryCanBeCreatedAndLoaded() throws {
         let store = try makeStore()
 

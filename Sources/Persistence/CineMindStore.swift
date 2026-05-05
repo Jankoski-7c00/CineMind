@@ -9,6 +9,10 @@ public final class CineMindStore {
         try SQLiteMigrator.migrate(connection)
     }
 
+    public init(readOnlyPath path: String) throws {
+        connection = try SQLiteConnection(path: path, mode: .readOnly)
+    }
+
     public static func inMemory() throws -> CineMindStore {
         try CineMindStore(path: ":memory:")
     }
@@ -457,6 +461,20 @@ extension CineMindStore {
         }
 
         return try mapScanRun(statement)
+    }
+
+    public func fetchScanRuns(libraryID: LibraryID) throws -> [ScanRun] {
+        let statement = try connection.prepare(scanRunSelectSQL + """
+             WHERE library_id = ?
+            ORDER BY started_at ASC
+            """)
+        try statement.bind(libraryID, at: 1)
+
+        var runs: [ScanRun] = []
+        while try statement.step() {
+            runs.append(try mapScanRun(statement))
+        }
+        return runs
     }
 
     public func recordScanIssue(_ issue: ScanIssue) throws {
