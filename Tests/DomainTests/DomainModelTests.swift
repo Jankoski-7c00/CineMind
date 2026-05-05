@@ -19,13 +19,41 @@ final class DomainModelTests: XCTestCase {
         XCTAssertEqual(item.mediaType, .movie)
     }
 
-    func testEpisodeInfoStaysMinimal() {
-        let episode = EpisodeInfo(
+    func testMediaFileBelongsToMediaItemAndSupportsMultipleFiles() {
+        let item = MediaItem(mediaType: .movie, title: "Moon", year: 2009)
+        let primaryFile = MediaFile(
+            mediaItemID: item.id,
+            libraryFolderID: "folder-1",
+            relativePath: "Moon (2009).mkv",
+            absolutePathHash: "hash-1",
+            fileName: "Moon (2009).mkv",
+            fileExtension: "mkv",
+            fileSizeBytes: 1024
+        )
+        let backupFile = MediaFile(
+            mediaItemID: item.id,
+            libraryFolderID: "folder-1",
+            relativePath: "Backups/Moon (2009).mp4",
+            absolutePathHash: "hash-2",
+            fileName: "Moon (2009).mp4",
+            fileExtension: "MP4",
+            fileSizeBytes: 2048
+        )
+
+        XCTAssertEqual(primaryFile.mediaItemID, item.id)
+        XCTAssertEqual(backupFile.mediaItemID, item.id)
+        XCTAssertNotEqual(primaryFile.id, backupFile.id)
+        XCTAssertEqual(backupFile.fileExtension, "mp4")
+    }
+
+    func testMediaTypeMovieVsEpisodeBehavior() throws {
+        let episode = try EpisodeInfo.validated(
             seriesTitle: "Severance",
             seasonNumber: 1,
             episodeNumber: 2,
             episodeTitle: "Half Loop"
         )
+        let movie = MediaItem(mediaType: .movie, title: "Arrival", year: 2016)
         let item = MediaItem(
             mediaType: .episode,
             title: "Half Loop",
@@ -33,10 +61,36 @@ final class DomainModelTests: XCTestCase {
             episodeInfo: episode
         )
 
+        XCTAssertFalse(MediaType.movie.requiresEpisodeInfo)
+        XCTAssertTrue(MediaType.episode.requiresEpisodeInfo)
+        XCTAssertNil(movie.episodeInfo)
+        XCTAssertEqual(item.mediaType, .episode)
         XCTAssertEqual(item.episodeInfo?.seriesTitle, "Severance")
         XCTAssertEqual(item.episodeInfo?.seasonNumber, 1)
         XCTAssertEqual(item.episodeInfo?.episodeNumber, 2)
         XCTAssertEqual(item.episodeInfo?.episodeTitle, "Half Loop")
+    }
+
+    func testEpisodeInfoValidationRequiresPositiveSeasonAndEpisodeNumbers() throws {
+        let episode = try EpisodeInfo.validated(
+            seriesTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 2
+        )
+
+        XCTAssertEqual(episode.seriesTitle, "Severance")
+        XCTAssertEqual(episode.seasonNumber, 1)
+        XCTAssertEqual(episode.episodeNumber, 2)
+        XCTAssertThrowsError(
+            try EpisodeInfo.validated(seriesTitle: "Severance", seasonNumber: 0, episodeNumber: 2)
+        ) { error in
+            XCTAssertEqual(error as? DomainValidationError, .invalidSeasonNumber(0))
+        }
+        XCTAssertThrowsError(
+            try EpisodeInfo.validated(seriesTitle: "Severance", seasonNumber: 1, episodeNumber: -1)
+        ) { error in
+            XCTAssertEqual(error as? DomainValidationError, .invalidEpisodeNumber(-1))
+        }
     }
 
     func testTitleNormalizationRemovesCommonFilenameSeparators() {
@@ -46,10 +100,9 @@ final class DomainModelTests: XCTestCase {
         )
     }
 
-    func testScanRunDefaultsToRunningAndTracksAvailabilitySeparately() {
-        let run = ScanRun(libraryID: "library-1")
+    func testMediaFileAvailabilityAvailableAndUnavailableBehavior() {
         let item = MediaItem(mediaType: .movie, title: "Moon", year: 2009)
-        let unavailableFile = MediaFile(
+        let availableFile = MediaFile(
             mediaItemID: item.id,
             libraryFolderID: "folder-1",
             relativePath: "Moon (2009).mkv",
@@ -57,10 +110,95 @@ final class DomainModelTests: XCTestCase {
             fileName: "Moon (2009).mkv",
             fileExtension: "mkv",
             fileSizeBytes: 512,
-            isAvailable: false
+            availability: .available
+        )
+        let unavailableFile = MediaFile(
+            mediaItemID: item.id,
+            libraryFolderID: "folder-1",
+            relativePath: "Missing/Moon (2009).mkv",
+            absolutePathHash: "missing-hash",
+            fileName: "Moon (2009).mkv",
+            fileExtension: "mkv",
+            fileSizeBytes: 512,
+            availability: .unavailable
         )
 
+        XCTAssertTrue(MediaFileAvailability.available.isAvailable)
+        XCTAssertFalse(MediaFileAvailability.unavailable.isAvailable)
+        XCTAssertEqual(MediaFileAvailability(isAvailable: true), .available)
+        XCTAssertEqual(MediaFileAvailability(isAvailable: false), .unavailable)
+        XCTAssertEqual(availableFile.availability, .available)
+        XCTAssertEqual(unavailableFile.availability, .unavailable)
+    }
+
+    func testMediaFileAvailabilityAndLegacyIsAvailableStayBidirectionallyConsistent() {
+        let item = MediaItem(mediaType: .movie, title: "Moon", year: 2009)
+        var file = MediaFile(
+            mediaItemID: item.id,
+            libraryFolderID: "folder-1",
+            relativePath: "Moon (2009).mkv",
+            absolutePathHash: "diagnostic-hash",
+            fileName: "Moon (2009).mkv",
+            fileExtension: "mkv",
+            fileSizeBytes: 512,
+            isAvailable: true
+        )
+
+        XCTAssertEqual(file.availability, .available)
+        file.availability = .unavailable
+        XCTAssertFalse(file.isAvailable)
+        file.isAvailable = true
+        XCTAssertEqual(file.availability, .available)
+    }
+
+    func testScanStatusBehavior() {
+        let run = ScanRun(libraryID: "library-1")
+
         XCTAssertEqual(run.status, .running)
-        XCTAssertFalse(unavailableFile.isAvailable)
+        XCTAssertFalse(ScanStatus.running.isTerminal)
+        XCTAssertTrue(ScanStatus.completed.isTerminal)
+        XCTAssertTrue(ScanStatus.failed.isTerminal)
+    }
+
+    func testScanIssueTypeCoverage() {
+        XCTAssertEqual(
+            Set(ScanIssueType.allCases),
+            [
+                .folderUnavailable,
+                .unsupportedFile,
+                .metadataParseFailed,
+                .duplicateCandidate,
+                .renameCandidate,
+                .filesystemError
+            ]
+        )
+    }
+
+    func testFilePathIsNotUsedAsMediaItemIdentity() {
+        let item = MediaItem(id: "media-item-1", mediaType: .movie, title: "Arrival", year: 2016)
+        let originalFile = MediaFile(
+            mediaItemID: item.id,
+            libraryFolderID: "folder-1",
+            relativePath: "Arrival (2016).mkv",
+            absolutePathHash: "hash-1",
+            fileName: "Arrival (2016).mkv",
+            fileExtension: "mkv",
+            fileSizeBytes: 1024
+        )
+        let renamedFile = MediaFile(
+            mediaItemID: item.id,
+            libraryFolderID: "folder-1",
+            relativePath: "Renamed/Arrival (2016).mkv",
+            absolutePathHash: "hash-2",
+            fileName: "Arrival (2016).mkv",
+            fileExtension: "mkv",
+            fileSizeBytes: 1024
+        )
+
+        XCTAssertEqual(item.id, "media-item-1")
+        XCTAssertEqual(originalFile.mediaItemID, item.id)
+        XCTAssertEqual(renamedFile.mediaItemID, item.id)
+        XCTAssertNotEqual(originalFile.relativePath, renamedFile.relativePath)
+        XCTAssertNotEqual(originalFile.id, renamedFile.id)
     }
 }

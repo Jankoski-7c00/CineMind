@@ -1,5 +1,13 @@
 import Foundation
-import Shared
+
+/// Phase 1 compatibility choice: IDs remain String-backed to preserve existing Scanner/Persistence APIs.
+/// They may become wrapper value types once downstream targets can migrate together.
+public typealias LibraryID = String
+public typealias LibraryFolderID = String
+public typealias MediaItemID = String
+public typealias MediaFileID = String
+public typealias ScanRunID = String
+public typealias ScanIssueID = String
 
 public enum DomainID {
     public static func new() -> String {
@@ -20,18 +28,46 @@ public enum MediaTitleNormalizer {
     }
 }
 
-public enum MediaType: String, Codable, Sendable, Equatable {
+public enum MediaType: String, Codable, Sendable, Equatable, CaseIterable {
     case movie
     case episode
+
+    public var requiresEpisodeInfo: Bool {
+        self == .episode
+    }
 }
 
-public enum ScanRunStatus: String, Codable, Sendable, Equatable {
+public enum MediaFileAvailability: String, Codable, Sendable, Equatable, CaseIterable {
+    case available
+    case unavailable
+
+    public init(isAvailable: Bool) {
+        self = isAvailable ? .available : .unavailable
+    }
+
+    public var isAvailable: Bool {
+        self == .available
+    }
+}
+
+public enum ScanStatus: String, Codable, Sendable, Equatable, CaseIterable {
     case running
     case completed
     case failed
+
+    public var isTerminal: Bool {
+        switch self {
+        case .running:
+            false
+        case .completed, .failed:
+            true
+        }
+    }
 }
 
-public enum ScanIssueType: String, Codable, Sendable, Equatable {
+public typealias ScanRunStatus = ScanStatus
+
+public enum ScanIssueType: String, Codable, Sendable, Equatable, CaseIterable {
     case folderUnavailable
     case unsupportedFile
     case metadataParseFailed
@@ -40,14 +76,20 @@ public enum ScanIssueType: String, Codable, Sendable, Equatable {
     case filesystemError
 }
 
+public enum DomainValidationError: Error, Sendable, Equatable {
+    case emptySeriesTitle
+    case invalidSeasonNumber(Int)
+    case invalidEpisodeNumber(Int)
+}
+
 public struct Library: Codable, Sendable, Equatable {
-    public var id: String
+    public var id: LibraryID
     public var name: String
     public var createdAt: Date
     public var updatedAt: Date
 
     public init(
-        id: String = DomainID.new(),
+        id: LibraryID = DomainID.new(),
         name: String,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -60,8 +102,8 @@ public struct Library: Codable, Sendable, Equatable {
 }
 
 public struct LibraryFolder: Codable, Sendable, Equatable {
-    public var id: String
-    public var libraryID: String
+    public var id: LibraryFolderID
+    public var libraryID: LibraryID
     public var displayName: String
     public var rootPath: String
     public var accessBookmark: Data?
@@ -72,8 +114,8 @@ public struct LibraryFolder: Codable, Sendable, Equatable {
     public var updatedAt: Date
 
     public init(
-        id: String = DomainID.new(),
-        libraryID: String,
+        id: LibraryFolderID = DomainID.new(),
+        libraryID: LibraryID,
         displayName: String,
         rootPath: String,
         accessBookmark: Data? = nil,
@@ -116,10 +158,34 @@ public struct EpisodeInfo: Codable, Sendable, Equatable {
         self.episodeNumber = episodeNumber
         self.episodeTitle = episodeTitle
     }
+
+    public static func validated(
+        seriesTitle: String,
+        seasonNumber: Int,
+        episodeNumber: Int,
+        episodeTitle: String? = nil
+    ) throws -> EpisodeInfo {
+        guard !seriesTitle.isEmpty else {
+            throw DomainValidationError.emptySeriesTitle
+        }
+        guard seasonNumber > 0 else {
+            throw DomainValidationError.invalidSeasonNumber(seasonNumber)
+        }
+        guard episodeNumber > 0 else {
+            throw DomainValidationError.invalidEpisodeNumber(episodeNumber)
+        }
+
+        return EpisodeInfo(
+            seriesTitle: seriesTitle,
+            seasonNumber: seasonNumber,
+            episodeNumber: episodeNumber,
+            episodeTitle: episodeTitle
+        )
+    }
 }
 
 public struct MediaItem: Codable, Sendable, Equatable {
-    public var id: String
+    public var id: MediaItemID
     public var mediaType: MediaType
     public var title: String
     public var normalizedTitle: String
@@ -129,7 +195,7 @@ public struct MediaItem: Codable, Sendable, Equatable {
     public var updatedAt: Date
 
     public init(
-        id: String = DomainID.new(),
+        id: MediaItemID = DomainID.new(),
         mediaType: MediaType,
         title: String,
         normalizedTitle: String? = nil,
@@ -155,9 +221,9 @@ public struct MediaItem: Codable, Sendable, Equatable {
 }
 
 public struct MediaFile: Codable, Sendable, Equatable {
-    public var id: String
-    public var mediaItemID: String
-    public var libraryFolderID: String
+    public var id: MediaFileID
+    public var mediaItemID: MediaItemID
+    public var libraryFolderID: LibraryFolderID
     public var relativePath: String
     public var absolutePathHash: String
     public var fileName: String
@@ -169,10 +235,19 @@ public struct MediaFile: Codable, Sendable, Equatable {
     public var createdAt: Date
     public var updatedAt: Date
 
+    public var availability: MediaFileAvailability {
+        get {
+            MediaFileAvailability(isAvailable: isAvailable)
+        }
+        set {
+            isAvailable = newValue.isAvailable
+        }
+    }
+
     public init(
-        id: String = DomainID.new(),
-        mediaItemID: String,
-        libraryFolderID: String,
+        id: MediaFileID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        libraryFolderID: LibraryFolderID,
         relativePath: String,
         absolutePathHash: String,
         fileName: String,
@@ -180,6 +255,7 @@ public struct MediaFile: Codable, Sendable, Equatable {
         fileSizeBytes: Int64,
         modifiedAt: Date? = nil,
         isAvailable: Bool = true,
+        availability: MediaFileAvailability? = nil,
         lastSeenAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -196,7 +272,7 @@ public struct MediaFile: Codable, Sendable, Equatable {
         self.fileExtension = fileExtension.lowercased()
         self.fileSizeBytes = fileSizeBytes
         self.modifiedAt = modifiedAt
-        self.isAvailable = isAvailable
+        self.isAvailable = availability?.isAvailable ?? isAvailable
         self.lastSeenAt = lastSeenAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -204,8 +280,8 @@ public struct MediaFile: Codable, Sendable, Equatable {
 }
 
 public struct ScanRun: Codable, Sendable, Equatable {
-    public var id: String
-    public var libraryID: String
+    public var id: ScanRunID
+    public var libraryID: LibraryID
     public var startedAt: Date
     public var finishedAt: Date?
     public var status: ScanRunStatus
@@ -216,8 +292,8 @@ public struct ScanRun: Codable, Sendable, Equatable {
     public var issuesCount: Int
 
     public init(
-        id: String = DomainID.new(),
-        libraryID: String,
+        id: ScanRunID = DomainID.new(),
+        libraryID: LibraryID,
         startedAt: Date = Date(),
         finishedAt: Date? = nil,
         status: ScanRunStatus = .running,
@@ -241,18 +317,18 @@ public struct ScanRun: Codable, Sendable, Equatable {
 }
 
 public struct ScanIssue: Codable, Sendable, Equatable {
-    public var id: String
-    public var scanRunID: String
-    public var libraryFolderID: String?
+    public var id: ScanIssueID
+    public var scanRunID: ScanRunID
+    public var libraryFolderID: LibraryFolderID?
     public var pathHash: String?
     public var issueType: ScanIssueType
     public var message: String
     public var createdAt: Date
 
     public init(
-        id: String = DomainID.new(),
-        scanRunID: String,
-        libraryFolderID: String?,
+        id: ScanIssueID = DomainID.new(),
+        scanRunID: ScanRunID,
+        libraryFolderID: LibraryFolderID?,
         pathHash: String?,
         issueType: ScanIssueType,
         message: String,
