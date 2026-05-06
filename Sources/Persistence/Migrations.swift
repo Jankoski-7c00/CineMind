@@ -9,26 +9,37 @@ internal enum SQLiteMigrator {
             )
             """)
 
-        let applied = try appliedVersions(connection)
-        guard !applied.contains(1) else {
-            return
-        }
-
         do {
-            try connection.transaction {
-                for statement in version1Statements {
-                    try connection.execute(statement)
-                }
-                let insert = try connection.prepare("""
-                    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
-                    VALUES (?, ?)
-                    """)
-                try insert.bind(1, at: 1)
-                try insert.bind(Date().timeIntervalSince1970, at: 2)
-                _ = try insert.step()
+            var applied = try appliedVersions(connection)
+            if !applied.contains(1) {
+                try apply(version: 1, statements: version1Statements, connection: connection)
+                applied.insert(1)
+            }
+            if !applied.contains(2) {
+                try apply(version: 2, statements: version2Statements, connection: connection)
+                applied.insert(2)
             }
         } catch {
             throw PersistenceError.migrationFailed(error.localizedDescription)
+        }
+    }
+
+    private static func apply(
+        version: Int,
+        statements: [String],
+        connection: SQLiteConnection
+    ) throws {
+        try connection.transaction {
+            for statement in statements {
+                try connection.execute(statement)
+            }
+            let insert = try connection.prepare("""
+                INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+                VALUES (?, ?)
+                """)
+            try insert.bind(version, at: 1)
+            try insert.bind(Date().timeIntervalSince1970, at: 2)
+            _ = try insert.step()
         }
     }
 
@@ -139,6 +150,36 @@ internal enum SQLiteMigrator {
         """
         CREATE INDEX IF NOT EXISTS idx_scan_issues_scan_run_id
         ON scan_issues(scan_run_id)
+        """
+    ]
+
+    private static let version2Statements = [
+        """
+        CREATE TABLE IF NOT EXISTS playback_history (
+            id TEXT PRIMARY KEY,
+            media_item_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE RESTRICT,
+            media_file_id TEXT NOT NULL REFERENCES media_files(id) ON DELETE RESTRICT,
+            position_ms INTEGER NOT NULL CHECK(position_ms >= 0),
+            duration_ms INTEGER CHECK(duration_ms IS NULL OR duration_ms >= 0),
+            completed INTEGER NOT NULL CHECK(completed IN (0, 1)),
+            play_count INTEGER NOT NULL CHECK(play_count >= 0),
+            last_played_at REAL NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            UNIQUE(media_item_id, media_file_id)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_playback_history_media_item_id
+        ON playback_history(media_item_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_playback_history_media_file_id
+        ON playback_history(media_file_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_playback_history_last_played_at
+        ON playback_history(last_played_at)
         """
     ]
 }

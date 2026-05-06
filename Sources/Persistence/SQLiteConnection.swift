@@ -8,6 +8,12 @@ public enum PersistenceError: Error, Sendable, Equatable, CustomStringConvertibl
     case stepFailed(String)
     case migrationFailed(String)
     case transactionFailed(String)
+    case mediaFileMediaItemMismatch(
+        mediaItemID: String,
+        mediaFileID: String,
+        actualMediaItemID: String
+    )
+    case duplicatePlaybackHistoryPair(existingID: String, attemptedID: String)
 
     public var description: String {
         switch self {
@@ -23,6 +29,10 @@ public enum PersistenceError: Error, Sendable, Equatable, CustomStringConvertibl
             "migrationFailed(\(message))"
         case .transactionFailed(let message):
             "transactionFailed(\(message))"
+        case .mediaFileMediaItemMismatch(let mediaItemID, let mediaFileID, let actualMediaItemID):
+            "mediaFileMediaItemMismatch(mediaItemID: \(mediaItemID), mediaFileID: \(mediaFileID), actualMediaItemID: \(actualMediaItemID))"
+        case .duplicatePlaybackHistoryPair(let existingID, let attemptedID):
+            "duplicatePlaybackHistoryPair(existingID: \(existingID), attemptedID: \(attemptedID))"
         }
     }
 }

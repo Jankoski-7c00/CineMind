@@ -382,6 +382,180 @@ extension CineMindStore {
     }
 }
 
+// MARK: - PlaybackHistory
+
+extension CineMindStore {
+    public func fetchPlaybackHistory(
+        mediaItemID: MediaItemID,
+        mediaFileID: MediaFileID
+    ) throws -> PlaybackHistory? {
+        let statement = try connection.prepare(playbackHistorySelectSQL + """
+             WHERE media_item_id = ? AND media_file_id = ?
+            LIMIT 1
+            """)
+        try statement.bind(mediaItemID, at: 1)
+        try statement.bind(mediaFileID, at: 2)
+
+        guard try statement.step() else {
+            return nil
+        }
+
+        return try mapPlaybackHistory(statement)
+    }
+
+    public func fetchMostRecentPlaybackHistory(
+        mediaItemID: MediaItemID
+    ) throws -> PlaybackHistory? {
+        let statement = try connection.prepare(playbackHistorySelectSQL + """
+             WHERE media_item_id = ?
+            ORDER BY last_played_at DESC, updated_at DESC
+            LIMIT 1
+            """)
+        try statement.bind(mediaItemID, at: 1)
+
+        guard try statement.step() else {
+            return nil
+        }
+
+        return try mapPlaybackHistory(statement)
+    }
+
+    public func savePlaybackHistory(_ history: PlaybackHistory) throws {
+        try history.validate()
+        try verifyMediaFile(history.mediaFileID, belongsTo: history.mediaItemID)
+        try ensurePlaybackHistoryPairIsUnique(history)
+
+        let statement = try connection.prepare("""
+            INSERT INTO playback_history (
+                id, media_item_id, media_file_id, position_ms, duration_ms,
+                completed, play_count, last_played_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                media_item_id = excluded.media_item_id,
+                media_file_id = excluded.media_file_id,
+                position_ms = excluded.position_ms,
+                duration_ms = excluded.duration_ms,
+                completed = excluded.completed,
+                play_count = excluded.play_count,
+                last_played_at = excluded.last_played_at,
+                updated_at = excluded.updated_at
+            """)
+        try bindPlaybackHistory(history, to: statement)
+        _ = try statement.step()
+    }
+
+    public func savePlaybackProgress(
+        mediaItemID: MediaItemID,
+        mediaFileID: MediaFileID,
+        positionMS: Int,
+        durationMS: Int?,
+        completed: Bool,
+        playedAt: Date
+    ) throws {
+        try PlaybackHistory.validate(positionMS: positionMS, durationMS: durationMS, playCount: 0)
+        try verifyMediaFile(mediaFileID, belongsTo: mediaItemID)
+
+        let statement = try connection.prepare("""
+            INSERT INTO playback_history (
+                id, media_item_id, media_file_id, position_ms, duration_ms,
+                completed, play_count, last_played_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(media_item_id, media_file_id) DO UPDATE SET
+                position_ms = excluded.position_ms,
+                duration_ms = excluded.duration_ms,
+                completed = excluded.completed,
+                last_played_at = excluded.last_played_at,
+                updated_at = excluded.updated_at
+            """)
+        try statement.bind(DomainID.new(), at: 1)
+        try statement.bind(mediaItemID, at: 2)
+        try statement.bind(mediaFileID, at: 3)
+        try statement.bind(positionMS, at: 4)
+        try statement.bind(durationMS, at: 5)
+        try statement.bind(completed, at: 6)
+        try statement.bind(0, at: 7)
+        try statement.bind(timestamp(playedAt), at: 8)
+        try statement.bind(timestamp(playedAt), at: 9)
+        try statement.bind(timestamp(playedAt), at: 10)
+        _ = try statement.step()
+    }
+
+    public func incrementPlaybackCount(
+        mediaItemID: MediaItemID,
+        mediaFileID: MediaFileID,
+        playedAt: Date
+    ) throws {
+        try verifyMediaFile(mediaFileID, belongsTo: mediaItemID)
+
+        let statement = try connection.prepare("""
+            INSERT INTO playback_history (
+                id, media_item_id, media_file_id, position_ms, duration_ms,
+                completed, play_count, last_played_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(media_item_id, media_file_id) DO UPDATE SET
+                play_count = playback_history.play_count + 1,
+                last_played_at = excluded.last_played_at,
+                updated_at = excluded.updated_at
+            """)
+        try statement.bind(DomainID.new(), at: 1)
+        try statement.bind(mediaItemID, at: 2)
+        try statement.bind(mediaFileID, at: 3)
+        try statement.bind(0, at: 4)
+        try statement.bind(Int?.none, at: 5)
+        try statement.bind(false, at: 6)
+        try statement.bind(1, at: 7)
+        try statement.bind(timestamp(playedAt), at: 8)
+        try statement.bind(timestamp(playedAt), at: 9)
+        try statement.bind(timestamp(playedAt), at: 10)
+        _ = try statement.step()
+    }
+
+    private func ensurePlaybackHistoryPairIsUnique(_ history: PlaybackHistory) throws {
+        guard let existing = try fetchPlaybackHistory(
+            mediaItemID: history.mediaItemID,
+            mediaFileID: history.mediaFileID
+        ) else {
+            return
+        }
+
+        guard existing.id == history.id else {
+            throw PersistenceError.duplicatePlaybackHistoryPair(
+                existingID: existing.id,
+                attemptedID: history.id
+            )
+        }
+    }
+
+    private func verifyMediaFile(
+        _ mediaFileID: MediaFileID,
+        belongsTo mediaItemID: MediaItemID
+    ) throws {
+        let statement = try connection.prepare("""
+            SELECT media_item_id
+            FROM media_files
+            WHERE id = ?
+            LIMIT 1
+            """)
+        try statement.bind(mediaFileID, at: 1)
+
+        guard try statement.step() else {
+            return
+        }
+
+        let actualMediaItemID = try requiredString(statement, 0)
+        guard actualMediaItemID == mediaItemID else {
+            throw PersistenceError.mediaFileMediaItemMismatch(
+                mediaItemID: mediaItemID,
+                mediaFileID: mediaFileID,
+                actualMediaItemID: actualMediaItemID
+            )
+        }
+    }
+}
+
 // MARK: - Scan
 
 extension CineMindStore {
@@ -556,6 +730,19 @@ extension CineMindStore {
         try statement.bind(timestamp(file.updatedAt), at: 13)
     }
 
+    private func bindPlaybackHistory(_ history: PlaybackHistory, to statement: SQLiteStatement) throws {
+        try statement.bind(history.id, at: 1)
+        try statement.bind(history.mediaItemID, at: 2)
+        try statement.bind(history.mediaFileID, at: 3)
+        try statement.bind(history.positionMS, at: 4)
+        try statement.bind(history.durationMS, at: 5)
+        try statement.bind(history.completed, at: 6)
+        try statement.bind(history.playCount, at: 7)
+        try statement.bind(timestamp(history.lastPlayedAt), at: 8)
+        try statement.bind(timestamp(history.createdAt), at: 9)
+        try statement.bind(timestamp(history.updatedAt), at: 10)
+    }
+
     private func mapLibrary(_ statement: SQLiteStatement) throws -> Library {
         Library(
             id: try requiredString(statement, 0),
@@ -631,6 +818,21 @@ extension CineMindStore {
         )
     }
 
+    private func mapPlaybackHistory(_ statement: SQLiteStatement) throws -> PlaybackHistory {
+        PlaybackHistory(
+            id: try requiredString(statement, 0),
+            mediaItemID: try requiredString(statement, 1),
+            mediaFileID: try requiredString(statement, 2),
+            positionMS: try requiredInt(statement, 3),
+            durationMS: statement.int(at: 4),
+            completed: try requiredStrictBool(statement, 5),
+            playCount: try requiredInt(statement, 6),
+            lastPlayedAt: try requiredDate(statement, 7),
+            createdAt: try requiredDate(statement, 8),
+            updatedAt: try requiredDate(statement, 9)
+        )
+    }
+
     private func mapScanRun(_ statement: SQLiteStatement) throws -> ScanRun {
         ScanRun(
             id: try requiredString(statement, 0),
@@ -686,6 +888,13 @@ extension CineMindStore {
         return value
     }
 
+    private func requiredStrictBool(_ statement: SQLiteStatement, _ index: Int32) throws -> Bool {
+        guard let value = statement.int(at: index), value == 0 || value == 1 else {
+            throw PersistenceError.stepFailed("expected bool 0/1 at column \(index)")
+        }
+        return value == 1
+    }
+
     private func timestamp(_ date: Date?) -> Double? {
         date?.timeIntervalSince1970
     }
@@ -707,6 +916,12 @@ private let mediaFileSelectSQL = """
            absolute_path_hash, file_name, file_extension, file_size_bytes,
            modified_at, is_available, last_seen_at, created_at, updated_at
     FROM media_files
+    """
+
+private let playbackHistorySelectSQL = """
+    SELECT id, media_item_id, media_file_id, position_ms, duration_ms,
+           completed, play_count, last_played_at, created_at, updated_at
+    FROM playback_history
     """
 
 private let scanRunSelectSQL = """

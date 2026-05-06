@@ -8,6 +8,7 @@ public typealias MediaItemID = String
 public typealias MediaFileID = String
 public typealias ScanRunID = String
 public typealias ScanIssueID = String
+public typealias PlaybackHistoryID = String
 
 public enum DomainID {
     public static func new() -> String {
@@ -80,6 +81,9 @@ public enum DomainValidationError: Error, Sendable, Equatable {
     case emptySeriesTitle
     case invalidSeasonNumber(Int)
     case invalidEpisodeNumber(Int)
+    case invalidPlaybackPositionMS(Int)
+    case invalidPlaybackDurationMS(Int)
+    case invalidPlaybackPlayCount(Int)
 }
 
 public struct Library: Codable, Sendable, Equatable {
@@ -341,5 +345,91 @@ public struct ScanIssue: Codable, Sendable, Equatable {
         self.issueType = issueType
         self.message = message
         self.createdAt = createdAt
+    }
+}
+
+public struct PlaybackHistory: Codable, Sendable, Equatable {
+    public var id: PlaybackHistoryID
+    public var mediaItemID: MediaItemID
+    public var mediaFileID: MediaFileID
+    public var positionMS: Int
+    public var durationMS: Int?
+    public var completed: Bool
+    public var playCount: Int
+    public var lastPlayedAt: Date
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: PlaybackHistoryID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        mediaFileID: MediaFileID,
+        positionMS: Int,
+        durationMS: Int? = nil,
+        completed: Bool,
+        playCount: Int,
+        lastPlayedAt: Date = Date(),
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        precondition(positionMS >= 0, "positionMS must be non-negative")
+        if let durationMS {
+            precondition(durationMS >= 0, "durationMS must be non-negative when known")
+        }
+        precondition(playCount >= 0, "playCount must be non-negative")
+
+        self.id = id
+        self.mediaItemID = mediaItemID
+        self.mediaFileID = mediaFileID
+        self.positionMS = positionMS
+        self.durationMS = durationMS
+        self.completed = completed
+        self.playCount = playCount
+        self.lastPlayedAt = lastPlayedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public static func validated(
+        id: PlaybackHistoryID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        mediaFileID: MediaFileID,
+        positionMS: Int,
+        durationMS: Int? = nil,
+        completed: Bool,
+        playCount: Int,
+        lastPlayedAt: Date = Date(),
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) throws -> PlaybackHistory {
+        try validate(positionMS: positionMS, durationMS: durationMS, playCount: playCount)
+        return PlaybackHistory(
+            id: id,
+            mediaItemID: mediaItemID,
+            mediaFileID: mediaFileID,
+            positionMS: positionMS,
+            durationMS: durationMS,
+            completed: completed,
+            playCount: playCount,
+            lastPlayedAt: lastPlayedAt,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    public func validate() throws {
+        try Self.validate(positionMS: positionMS, durationMS: durationMS, playCount: playCount)
+    }
+
+    public static func validate(positionMS: Int, durationMS: Int?, playCount: Int) throws {
+        guard positionMS >= 0 else {
+            throw DomainValidationError.invalidPlaybackPositionMS(positionMS)
+        }
+        if let durationMS, durationMS < 0 {
+            throw DomainValidationError.invalidPlaybackDurationMS(durationMS)
+        }
+        guard playCount >= 0 else {
+            throw DomainValidationError.invalidPlaybackPlayCount(playCount)
+        }
     }
 }

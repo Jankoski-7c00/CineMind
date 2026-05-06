@@ -201,4 +201,59 @@ final class DomainModelTests: XCTestCase {
         XCTAssertNotEqual(originalFile.relativePath, renamedFile.relativePath)
         XCTAssertNotEqual(originalFile.id, renamedFile.id)
     }
+
+    func testPlaybackHistoryAllowsValidNonNegativeValues() throws {
+        let playedAt = Date(timeIntervalSince1970: 1_000)
+        let history = try PlaybackHistory.validated(
+            id: "history-1",
+            mediaItemID: "item-1",
+            mediaFileID: "file-1",
+            positionMS: 1_000,
+            durationMS: 7_000,
+            completed: false,
+            playCount: 2,
+            lastPlayedAt: playedAt,
+            createdAt: playedAt,
+            updatedAt: playedAt
+        )
+
+        XCTAssertEqual(history.id, "history-1")
+        XCTAssertEqual(history.positionMS, 1_000)
+        XCTAssertEqual(history.durationMS, 7_000)
+        XCTAssertFalse(history.completed)
+        XCTAssertEqual(history.playCount, 2)
+        XCTAssertEqual(history.lastPlayedAt, playedAt)
+    }
+
+    func testPlaybackHistoryValidationRejectsNegativeValues() {
+        XCTAssertThrowsError(
+            try PlaybackHistory.validate(positionMS: -1, durationMS: 1, playCount: 0)
+        ) { error in
+            XCTAssertEqual(error as? DomainValidationError, .invalidPlaybackPositionMS(-1))
+        }
+        XCTAssertThrowsError(
+            try PlaybackHistory.validate(positionMS: 0, durationMS: -1, playCount: 0)
+        ) { error in
+            XCTAssertEqual(error as? DomainValidationError, .invalidPlaybackDurationMS(-1))
+        }
+        XCTAssertThrowsError(
+            try PlaybackHistory.validate(positionMS: 0, durationMS: nil, playCount: -1)
+        ) { error in
+            XCTAssertEqual(error as? DomainValidationError, .invalidPlaybackPlayCount(-1))
+        }
+    }
+
+    func testPlaybackHistoryStoresMediaItemAndMediaFileIDsSeparately() {
+        let history = PlaybackHistory(
+            mediaItemID: "media-item-1",
+            mediaFileID: "media-file-1",
+            positionMS: 0,
+            completed: false,
+            playCount: 0
+        )
+
+        XCTAssertEqual(history.mediaItemID, "media-item-1")
+        XCTAssertEqual(history.mediaFileID, "media-file-1")
+        XCTAssertNotEqual(history.mediaItemID, history.mediaFileID)
+    }
 }
