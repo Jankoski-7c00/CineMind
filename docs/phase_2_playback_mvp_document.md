@@ -1,4 +1,6 @@
-# PHASE_2_PLAYBACK_MVP.md
+# Phase 2 Playback MVP
+
+Canonical file: `docs/phase_2_playback_mvp_document.md`
 
 ## Phase 2: Playback MVP
 
@@ -6,10 +8,11 @@ This document defines the second development phase of CineMind.
 
 Phase 2 introduces local video playback using libmpv while preserving the architectural constraints established in:
 
-- CLAUDE.md
-- docs/PRODUCT_SCOPE.md
-- docs/ARCHITECTURE.md
-- docs/PHASE_1_LIBRARY_CORE.md
+- `CLAUDE.md`
+- `docs/PRODUCT_SCOPE.md`
+- `docs/ARCHITECTURE.md`
+- `docs/PHASE_1_LIBRARY_CORE.md`
+- `docs/PHASE_1_COMPLETION_REPORT.md`
 
 Phase 2 builds on the completed Phase 1 Library Core foundation.
 
@@ -21,28 +24,31 @@ Build the minimal playback pipeline:
 
 ```text
 Persisted MediaFile
-  → open playback session
-  → libmpv playback
-  → playback state/events
-  → persist playback progress
-  → reopen and resume
+  -> Application resolves playable file and resume state
+  -> Playback opens a session
+  -> libmpv plays local media
+  -> Playback emits state/events
+  -> Application throttles and persists progress
+  -> reopen and resume
 ```
 
 This phase is focused on:
 
 - stable local playback
-- architecture correctness
-- playback state management
+- strict libmpv integration boundaries
+- architecture-correct Application orchestration
+- playback state and event correctness
 - durable playback history
-- libmpv integration boundaries
+- explicit failure recovery
 
-This phase is NOT focused on:
+This phase is not focused on:
 
 - polished player UI
 - metadata enrichment
 - subtitle downloading
 - AI features
 - advanced playback workflows
+- packaging a vendored mpv framework
 
 ---
 
@@ -50,60 +56,72 @@ This phase is NOT focused on:
 
 ## Included
 
-- Playback module
-- Minimal Application module
-- libmpv integration
-- PlaybackCoordinator
-- PlaybackSession
-- Playback state/events
-- PlaybackHistory domain model
-- SQLite migration v2
-- Playback progress persistence
-- Resume playback support
-- Minimal playback shell/harness
-- Playback tests
+- Minimal `Application` module for playback use cases only.
+- Pure Swift `Playback` module for state, commands, events, coordinator, sessions, and backend protocols.
+- Concrete `LibMPVPlayback` adapter target for Homebrew/system libmpv.
+- `OpenMediaUseCase` to resolve a persisted `MediaFile` into a `PlayableFile`.
+- `PlaybackCoordinator` with one active session.
+- `PlaybackSession`.
+- `PlaybackState`, `PlaybackCommand`, `PlaybackEvent`, and `PlaybackError`.
+- `PlaybackHistory` domain model.
+- SQLite migration v2 for playback history.
+- Playback progress persistence.
+- Resume playback support for the same media file.
+- Track enumeration and backend-level track selection commands.
+- Minimal playback shell/harness.
+- Fake-backend unit tests and persistence/application integration tests.
+- Optional real-libmpv smoke validation when libmpv is installed.
 
 ---
 
 ## Explicitly Excluded
 
-Do NOT implement:
+Do not implement:
 
-- TMDB integration
-- subtitle downloading/search
-- AI features
-- recommendations
-- playback queue
-- next episode autoplay
-- playlist management
-- PiP
-- AirPlay
-- HDR controls
-- OSC/player chrome polish
-- plugin systems
-- IPC server
-- remote playback
-- streaming
-- multi-window synchronization
-- media server functionality
-- Mac App Store packaging work
-- advanced subtitle rendering controls
+- TMDB integration.
+- Subtitle downloading/search.
+- Local external subtitle discovery workflows.
+- AI features.
+- Recommendations.
+- Playback queue.
+- Next episode autoplay.
+- Playlist management.
+- PiP.
+- AirPlay.
+- HDR controls.
+- OSC/player chrome polish.
+- Plugin systems.
+- IPC server.
+- Remote playback.
+- Streaming.
+- Multi-window synchronization.
+- Media server functionality.
+- Mac App Store packaging work.
+- Vendored `xcframework` packaging for mpv.
+- Advanced subtitle rendering controls.
+- Full SwiftUI/AppKit player chrome.
 
 ---
 
 # 3. Architectural Direction
 
-## New Modules
+## New Targets
 
 ```text
 Sources/
   Application/
   Playback/
+  LibMPVPlayback/
+  CineMindPlaybackShell/
 
 Tests/
-  PlaybackTests/
   ApplicationTests/
+  PlaybackTests/
 ```
+
+`Playback` is pure Swift and testable without libmpv.
+
+`LibMPVPlayback` is the concrete C/libmpv adapter. It is part of the playback subsystem, but it must not be required by pure Playback tests.
 
 ---
 
@@ -112,28 +130,50 @@ Tests/
 Allowed:
 
 ```text
-Shell/UI
-  ↓
-Application
-  ↓
-Playback
-  ↓
-Domain
+CineMindPlaybackShell / future UI composition root
+  -> Application
+  -> Playback
+  -> LibMPVPlayback
 
 Application
-  ↓
+  -> Domain
+  -> Persistence
+  -> Playback
+  -> Shared
+
+Playback
+  -> Domain
+  -> Shared
+
+LibMPVPlayback
+  -> Playback
+  -> CLibMPV
+
 Persistence
+  -> Domain
+  -> Shared
 ```
 
 Forbidden:
 
 ```text
 Domain -> Playback
+Domain -> Persistence
+Domain -> libmpv
+Playback -> Persistence
+Playback -> SQLite
 Playback -> SwiftUI
 Playback -> AppKit UI state
-UI -> raw mpv APIs
 Persistence -> Playback internals
+UI/Shell -> raw mpv APIs
+UI/Shell -> SQLite queries outside Application/Persistence use cases
 ```
+
+Composition root rule:
+
+- The shell or future app target may wire concrete dependencies together.
+- Application use cases should depend on explicit abstractions where practical.
+- Playback must never resolve database records by itself.
 
 ---
 
@@ -143,29 +183,90 @@ Phase 1 intentionally avoided an Application layer.
 
 Phase 2 introduces a minimal Application module because playback requires orchestration between:
 
-- Playback
-- Persistence
-- Domain
-- future UI
+- persisted library records
+- file path and availability resolution
+- playback state
+- resume state
+- progress persistence
+- future UI commands
 
 The Application module must remain thin.
 
 Responsibilities:
 
-- playback use cases
-- progress persistence coordination
-- playback resume coordination
-- shell/UI-safe orchestration
+- resolve a `MediaFileID` into a playable local file.
+- validate file and folder availability before playback.
+- restore security-scoped access when bookmark data exists.
+- fetch resume history.
+- coordinate playback commands.
+- subscribe to playback events.
+- throttle and persist progress.
+- map recoverable errors for shell/UI use.
 
-The Application module must NOT become:
+The Application module must not become:
 
-- a service locator
-- a UI state framework
-- a dumping ground
+- a service locator.
+- a UI state framework.
+- a dumping ground.
+- a place for raw mpv calls.
 
 ---
 
-# 5. Playback Architecture
+# 5. Open Media Contract
+
+## Core Use Case
+
+Phase 2 playback of library media must start through:
+
+```text
+OpenMediaUseCase.open(mediaFileID)
+```
+
+Application responsibilities:
+
+1. Fetch `MediaFile`.
+2. Fetch the owning `LibraryFolder`.
+3. Reject unavailable media files.
+4. Reject unavailable folders unless access can be restored.
+5. Resolve the absolute local path from `LibraryFolder.rootPath + MediaFile.relativePath`.
+6. Verify the file still exists.
+7. Restore security-scoped bookmark access when `LibraryFolder.accessBookmark` is available.
+8. Fetch `PlaybackHistory`.
+9. Apply resume rules.
+10. Build a `PlayableFile`.
+11. Pass the `PlayableFile` to `PlaybackCoordinator`.
+
+Playback must not:
+
+- fetch `MediaFile` by ID.
+- fetch `LibraryFolder`.
+- inspect SQLite.
+- restore bookmarks.
+- decide library availability.
+
+## PlayableFile
+
+Playback receives a resolved value object:
+
+```text
+PlayableFile
+- media_item_id
+- media_file_id
+- url
+- display_name
+- resume_position_ms
+```
+
+Rules:
+
+- `url` must be a local file URL.
+- `resume_position_ms` may be nil.
+- Raw absolute paths must not be logged unless explicitly debug-enabled and redacted.
+- Playback events should carry media IDs, not database rows.
+
+---
+
+# 6. Playback Architecture
 
 ## Core Components
 
@@ -173,12 +274,19 @@ The Application module must NOT become:
 
 Responsibilities:
 
-- manage one active playback session
-- open media files
-- issue playback commands
-- publish playback state/events
-- coordinate lifecycle
-- coordinate progress persistence callbacks
+- manage one active playback session.
+- open a `PlayableFile`.
+- issue playback commands.
+- publish playback state/events.
+- serialize backend callbacks into a predictable event stream.
+- coordinate session lifecycle.
+- close/destroy the backend cleanly.
+
+Rules:
+
+- Only one active session exists in Phase 2.
+- Opening a new file stops the previous active session first.
+- Backend callbacks must never write to SQLite directly.
 
 ---
 
@@ -188,77 +296,48 @@ Represents a single playback lifecycle.
 
 Contains:
 
-- MediaFile reference
-- current playback state
-- duration
-- current position
-- track metadata if available
-- active playback backend
+- `PlayableFile`.
+- current playback state.
+- duration.
+- current position.
+- track metadata if available.
+- selected track IDs if known.
+- active playback backend.
+
+It must not contain:
+
+- raw mpv handles.
+- SQLite connection or repositories.
+- SwiftUI/AppKit presentation state.
 
 ---
 
 ### PlaybackBackend
 
-Abstraction layer around libmpv.
+Abstraction layer around playback engines.
 
 Required because:
 
-- tests must not depend on real mpv
-- future backend evolution should remain isolated
-- playback state should not leak mpv internals
+- tests must not depend on real mpv.
+- `Playback` should remain buildable without Homebrew/system libmpv.
+- playback state must not leak mpv internals.
+- future embedding strategy should remain isolated.
 
----
-
-### LibMPVBackend
-
-Concrete playback backend implementation.
-
-Responsibilities:
-
-- create/destroy mpv handle
-- initialize player
-- load file
-- observe events
-- map events into PlaybackEvent
-- cleanup resources
-
----
-
-# 6. Playback State Model
-
-## PlaybackState
-
-Required states:
+Required operations:
 
 ```text
-idle
-loading
-playing
-paused
-buffering
-ended
-failed
+load(playableFile)
+play()
+pause()
+seek(to_ms)
+stop()
+selectAudioTrack(track_id)
+selectSubtitleTrack(track_id)
+disableSubtitle()
+shutdown()
 ```
 
----
-
-## PlaybackCommand
-
-Required commands:
-
-```text
-open
-play
-pause
-seek
-stop
-```
-
----
-
-## PlaybackEvent
-
-Required events:
+Required event output:
 
 ```text
 stateChanged
@@ -271,6 +350,123 @@ tracksDiscovered
 
 ---
 
+### LibMPVPlayback Backend
+
+Concrete playback backend implementation.
+
+Responsibilities:
+
+- create/destroy mpv handle.
+- initialize player options.
+- load a local file URL.
+- issue mpv commands.
+- observe mpv events/properties.
+- map mpv events into `PlaybackEvent`.
+- map mpv failures into `PlaybackError`.
+- cleanup resources deterministically.
+
+It must not:
+
+- expose raw mpv handles outside `LibMPVPlayback`.
+- import Persistence.
+- import SwiftUI.
+- own Application state.
+
+---
+
+# 7. Playback State Model
+
+## PlaybackState
+
+Required states:
+
+```text
+idle
+loading
+ready
+playing
+paused
+buffering
+ended
+failed
+```
+
+`ready` means the file is loaded and duration/track metadata may be available, but playback is not currently running.
+
+---
+
+## State Transitions
+
+Required transition behavior:
+
+```text
+idle -> loading              open
+loading -> ready             backend loaded but not started
+loading -> playing           backend loaded and auto-started
+loading -> failed            load failure
+ready -> playing             play
+ready -> idle                stop
+playing -> paused            pause
+playing -> buffering         backend buffering event
+playing -> ended             playback ended
+playing -> failed            backend failure
+playing -> idle              stop
+paused -> playing            play
+paused -> idle               stop
+paused -> failed             backend failure
+buffering -> playing         backend resumes
+buffering -> paused          user pauses while buffering
+buffering -> failed          backend failure
+ended -> loading             open new media
+ended -> idle                stop/close
+failed -> loading            retry/open new media
+failed -> idle               stop/close
+```
+
+Rules:
+
+- Invalid commands must be ignored or reported as typed recoverable errors; they must not crash.
+- `stop` should result in a final progress save request before the session returns to `idle`.
+- `ended` is a terminal playback result for the current media unless a new file is opened.
+
+---
+
+## PlaybackCommand
+
+Required commands:
+
+```text
+open(playable_file)
+play
+pause
+seek(to_ms)
+stop
+select_audio_track(track_id)
+select_subtitle_track(track_id)
+disable_subtitle
+```
+
+Track selection commands are backend capabilities in Phase 2. A polished track-switching UI is deferred.
+
+---
+
+## PlaybackEvent
+
+Required events:
+
+```text
+stateChanged(state)
+positionUpdated(position_ms)
+durationUpdated(duration_ms)
+playbackEnded(final_position_ms, duration_ms)
+playbackFailed(error)
+tracksDiscovered(audio_tracks, subtitle_tracks)
+```
+
+Event ordering must be deterministic in tests with the fake backend.
+
+---
+
 ## PlaybackError
 
 Required categories:
@@ -279,7 +475,9 @@ Required categories:
 fileMissing
 permissionDenied
 unsupportedFormat
+mpvUnavailable
 mpvError
+invalidState
 unknown
 ```
 
@@ -289,11 +487,11 @@ Playback failure must never crash the app.
 
 ---
 
-# 7. libmpv Integration Strategy
+# 8. libmpv Integration Strategy
 
 ## Selected Strategy
 
-Phase 2 will use:
+Phase 2 uses:
 
 ```text
 Homebrew/system libmpv during development
@@ -301,23 +499,60 @@ Homebrew/system libmpv during development
 
 Reasoning:
 
-- fastest integration path
-- lowest Phase 2 complexity
-- avoids premature packaging work
-- enables rapid playback validation
+- fastest integration path.
+- lowest Phase 2 complexity.
+- avoids premature packaging work.
+- enables rapid playback validation.
 
-Vendored xcframework packaging is deferred.
+Vendored `xcframework` packaging is deferred.
 
 ---
 
-## Integration Constraints
+## Build Contract
 
-Do NOT:
+Target layout:
 
-- expose raw mpv handles outside Playback
-- let UI call mpv directly
-- let Domain import mpv headers
-- couple playback logic to UI frameworks
+```text
+Playback           pure Swift protocol/state/coordinator target
+CLibMPV            system library target
+LibMPVPlayback     concrete backend target depending on Playback + CLibMPV
+```
+
+SPM direction:
+
+```text
+.systemLibrary(
+    name: "CLibMPV",
+    pkgConfig: "mpv",
+    providers: [
+        .brew(["mpv"])
+    ]
+)
+```
+
+Implementation notes:
+
+- Keep fake-backend tests independent from `LibMPVPlayback`.
+- Do not make `PlaybackTests` require Homebrew mpv.
+- Real mpv smoke validation may require `PKG_CONFIG_PATH` for Homebrew installations.
+- Record the local `mpv --version` in manual validation notes when running smoke tests.
+- If libmpv is unavailable, pure Swift tests must still run.
+
+---
+
+## Rendering Strategy
+
+Phase 2 uses a minimal mpv-owned playback window for manual smoke validation.
+
+Rules:
+
+- No polished player chrome.
+- No SwiftUI player UI.
+- No AppKit UI state inside Playback.
+- Future embedded rendering must be introduced through a separate design decision.
+- If an embedded render target is needed later, the UI/harness owns the native view and Playback receives an opaque render target abstraction.
+
+Manual validation must confirm visible video output, not only event logs.
 
 ---
 
@@ -329,7 +564,7 @@ No advanced GPU/HDR tuning is included in this phase.
 
 ---
 
-# 8. Playback Persistence
+# 9. Playback Persistence
 
 ## New Domain Model
 
@@ -350,6 +585,18 @@ created_at
 updated_at
 ```
 
+Rules:
+
+- `position_ms` must be non-negative.
+- `duration_ms` must be non-negative when known.
+- `play_count` must be non-negative.
+- One Phase 2 history row is stored per `(media_item_id, media_file_id)`.
+- `media_item_id` preserves logical continuity.
+- `media_file_id` keeps resume behavior file-specific.
+- Playback history survives rescans.
+- Playback history survives unavailable files.
+- Playback history is never automatically deleted.
+
 ---
 
 ## SQLite Migration v2
@@ -360,12 +607,45 @@ Add table:
 playback_history
 ```
 
+Required constraints/indexes:
+
+```text
+PRIMARY KEY(id)
+FOREIGN KEY(media_item_id) REFERENCES media_items(id) ON DELETE RESTRICT
+FOREIGN KEY(media_file_id) REFERENCES media_files(id) ON DELETE RESTRICT
+UNIQUE(media_item_id, media_file_id)
+INDEX(media_item_id)
+INDEX(media_file_id)
+INDEX(last_played_at)
+```
+
+Migration rules:
+
+- New databases must apply v1 then v2.
+- Existing Phase 1 databases must upgrade to v2 without data loss.
+- Reopening an already migrated database must be idempotent.
+- Read-only store open must not attempt migration.
+- Migration failure must rollback partial v2 changes.
+
+---
+
+## Repository APIs
+
+Required Persistence APIs:
+
+```text
+fetchPlaybackHistory(mediaItemID, mediaFileID)
+fetchMostRecentPlaybackHistory(mediaItemID)
+savePlaybackHistory(history)
+savePlaybackProgress(mediaItemID, mediaFileID, positionMS, durationMS, completed, playedAt)
+incrementPlaybackCount(mediaItemID, mediaFileID, playedAt)
+```
+
 Rules:
 
-- playback history survives rescans
-- playback history survives unavailable files
-- playback history is never automatically deleted
-- migration must remain idempotent
+- Progress save should upsert into the unique `(media_item_id, media_file_id)` row.
+- `play_count` increments once per successful playback session start, not on every progress save.
+- Persistence should not decide whether a position is resumable; Application owns resume policy.
 
 ---
 
@@ -374,12 +654,43 @@ Rules:
 Selected behavior:
 
 ```text
-save every 5 seconds
+save every 5 seconds while playing
 save immediately on:
 - pause
+- seek completed
 - stop
 - playback end
+- application/session close
 ```
+
+Additional rules:
+
+- Do not write if position did not materially change.
+- Do not save progress for failed loads.
+- On `stop`, save the latest known position unless the session already ended.
+- On `playbackEnded`, save `completed = true`.
+- SQLite writes must be coordinated by Application, not mpv callbacks.
+
+---
+
+## Completion Rules
+
+Mark playback completed when:
+
+- a reliable `playbackEnded` event is received, or
+- duration is known and the saved position is near the end.
+
+Near-end threshold:
+
+```text
+remaining <= 120 seconds OR progress >= 95%
+```
+
+Rules:
+
+- Completed media should reopen from the beginning in Phase 2.
+- Seeking near the end should not crash or delete history.
+- Future smart resume prompts are deferred.
 
 ---
 
@@ -388,19 +699,28 @@ save immediately on:
 When reopening media:
 
 ```text
-if progress exists and playback not completed:
-  resume from last position
+if no history:
+  start from beginning
+else if history.completed:
+  start from beginning
+else if position < 10 seconds:
+  start from beginning
+else if duration known and remaining <= 120 seconds:
+  start from beginning
+else:
+  resume from saved position
 ```
 
-Phase 2 does NOT require:
+Phase 2 does not require:
 
-- smart resume prompts
-- cross-file resume
-- episode continuation logic
+- smart resume prompts.
+- cross-file resume.
+- episode continuation logic.
+- next episode logic.
 
 ---
 
-# 9. Track Handling
+# 10. Track Handling
 
 ## Selected Scope
 
@@ -408,6 +728,8 @@ Phase 2 includes:
 
 ```text
 read audio/subtitle track list
+expose track metadata through PlaybackEvent
+support backend commands to select/disable tracks
 ```
 
 Phase 2 excludes:
@@ -416,13 +738,30 @@ Phase 2 excludes:
 track switching UI
 subtitle downloads
 subtitle management workflows
+advanced subtitle styling
 ```
 
-Track information may be exposed through PlaybackEvent only.
+Track model:
+
+```text
+PlaybackTrack
+- id
+- type
+- language
+- title
+- is_default
+- is_selected
+```
+
+Rules:
+
+- Track IDs are backend IDs and must be treated as opaque.
+- Missing language/title is allowed.
+- Track discovery failure must not block basic playback.
 
 ---
 
-# 10. Minimal Playback Harness
+# 11. Minimal Playback Harness
 
 ## Selected Direction
 
@@ -440,77 +779,147 @@ CineMindShell
 
 Reasoning:
 
-- avoids polluting Phase 1 shell
-- isolates playback experiments
-- keeps library-core verification separate
+- avoids polluting Phase 1 shell.
+- isolates playback experiments.
+- keeps library-core verification separate.
 
 ---
 
-## PlaybackShell Responsibilities
+## Harness Modes
+
+### Direct File Smoke Mode
+
+```text
+CineMindPlaybackShell --file /path/to/video.mkv
+```
+
+Responsibilities:
+
+- open one local file URL.
+- start playback.
+- print state changes.
+- print progress updates.
+- validate libmpv can produce visible playback.
+
+No playback history is persisted in this mode because there is no `media_file_id`.
+
+---
+
+### Library-Backed Mode
+
+```text
+CineMindPlaybackShell --db /path/to/cinemind.sqlite --media-file-id <id>
+```
+
+Responsibilities:
+
+- load database through Application/Persistence.
+- resolve `MediaFile` and `LibraryFolder`.
+- start playback through `OpenMediaUseCase`.
+- print state changes.
+- print progress updates.
+- persist playback history.
+- reopen and verify resume behavior.
+
+---
+
+## Harness Restrictions
 
 Allowed:
 
-- open a local file
-- start playback
-- print playback state/events
-- print progress updates
-- validate playback history save/load
+- one active file/session.
+- keyboard or command-line driven play/pause/seek/stop if practical.
+- printed diagnostics.
+- mpv-owned window for smoke validation.
 
 Forbidden:
 
-- polished UI
-- media browser
-- playlist management
-- metadata display
-- AI workflows
+- polished UI.
+- media browser.
+- playlist management.
+- metadata display.
+- AI workflows.
+- raw SQLite queries in shell code.
+- raw mpv calls outside `LibMPVPlayback`.
 
 ---
 
-# 11. Persistence Coordination
+# 12. Persistence Coordination and Concurrency
 
 ## Selected Architecture
 
 Playback must not directly own SQLite persistence logic.
 
-Playback progress persistence should be coordinated through Application-level use cases.
+Playback progress persistence must be coordinated through Application-level use cases.
 
-Recommended pattern:
+Required pattern:
 
 ```text
 PlaybackCoordinator
-  ↓ events
-Application use case
-  ↓
+  -> PlaybackEvent stream
+Application progress coordinator
+  -> throttling / resume policy / completion policy
 Persistence APIs
 ```
 
 ---
 
-# 12. Phase 2 Task Breakdown
+## Threading Rules
 
-## Task 1: Phase 2 Documentation
-
-Create:
-
-```text
-docs/PHASE_2_PLAYBACK_MVP.md
-```
+- mpv callbacks must be converted into Playback events before leaving `LibMPVPlayback`.
+- mpv callbacks must not write SQLite.
+- `PlaybackCoordinator` must serialize state transitions through an actor or a private serial queue.
+- Application progress saving must run through one controlled execution path.
+- UI state updates in future app targets must hop to `MainActor`.
+- Long-running or blocking file/database operations must not run on the main thread.
 
 ---
 
-## Task 2: Application Module Skeleton
+## Event Stream Contract
+
+Recommended event delivery:
+
+```text
+AsyncStream<PlaybackEvent>
+```
+
+Equivalent callback-based delivery is acceptable if it preserves:
+
+- deterministic ordering.
+- cancellation.
+- explicit lifecycle shutdown.
+- testability with fake backend.
+
+---
+
+# 13. Phase 2 Task Breakdown
+
+## Task 1: Phase 2 Documentation
+
+Update:
+
+```text
+docs/phase_2_playback_mvp_document.md
+```
+
+This document is the implementation contract for Phase 2.
+
+---
+
+## Task 2: Package Target Topology
 
 Add:
 
 ```text
 Sources/Application
+Sources/Playback
+Sources/LibMPVPlayback
+Sources/CineMindPlaybackShell
 Tests/ApplicationTests
+Tests/PlaybackTests
 ```
 
-Responsibilities:
-
-- playback orchestration only
-- no UI framework state
+Update `Package.swift` without breaking Phase 1 targets.
 
 ---
 
@@ -518,48 +927,62 @@ Responsibilities:
 
 Implement:
 
-- PlaybackHistory domain model
-- migration v2
-- playback history repository APIs
-- persistence tests
+- `PlaybackHistory` domain model.
+- migration v2.
+- playback history repository APIs.
+- persistence tests for new DB, Phase 1 upgrade, idempotent reopen, read-only open, unique upsert, and rollback.
 
 ---
 
-## Task 4: Playback Module Skeleton
+## Task 4: Application Playback Use Cases
 
 Implement:
 
-- PlaybackCoordinator
-- PlaybackSession
-- PlaybackState
-- PlaybackCommand
-- PlaybackEvent
-- PlaybackError
-- PlaybackBackend protocol
-
-Use fake backend tests first.
+- `OpenMediaUseCase`.
+- `PlaybackProgressCoordinator`.
+- resume policy.
+- completion policy.
+- typed error mapping for missing file, unavailable folder, permission failure, and unsupported format.
 
 ---
 
-## Task 5: libmpv Backend
+## Task 5: Pure Playback Module
+
+Implement:
+
+- `PlayableFile`.
+- `PlaybackCoordinator`.
+- `PlaybackSession`.
+- `PlaybackState`.
+- `PlaybackCommand`.
+- `PlaybackEvent`.
+- `PlaybackError`.
+- `PlaybackTrack`.
+- `PlaybackBackend` protocol.
+- fake backend tests first.
+
+---
+
+## Task 6: libmpv Backend
 
 Implement:
 
 ```text
-LibMPVBackend
+LibMPVPlayback
 ```
 
 Responsibilities:
 
-- initialize mpv
-- load media file
-- playback commands
-- observe events
-- cleanup
+- initialize mpv.
+- load media file.
+- playback commands.
+- track commands.
+- observe events/properties.
+- cleanup.
 
 ---
 
-## Task 6: Playback Harness
+## Task 7: Playback Harness
 
 Create:
 
@@ -569,37 +992,43 @@ CineMindPlaybackShell
 
 Capabilities:
 
-- play one local media file
-- print state changes
-- print progress updates
-
-No UI.
+- `--file` direct smoke playback.
+- `--db --media-file-id` library-backed playback.
+- print state changes.
+- print progress updates.
+- validate visible playback manually.
+- validate playback history save/load in library-backed mode.
 
 ---
 
-## Task 7: Playback Progress Persistence
+## Task 8: Progress Persistence Integration
 
 Implement:
 
-- throttled progress saving
-- pause/end save
-- resume playback
-- persistence integration tests
+- throttled progress saving.
+- pause/seek/stop/end save.
+- play count update once per session.
+- resume playback.
+- application integration tests with fake clock and fake backend.
 
 ---
 
-# 13. Test Plan
+# 14. Test Plan
 
 ## PlaybackTests
 
 Required:
 
-- playback state transitions
-- fake backend behavior
-- playback command handling
-- event propagation
-- playback failure handling
-- progress throttling behavior
+- state transition table.
+- fake backend behavior.
+- command handling.
+- event propagation and ordering.
+- playback failure handling.
+- one-active-session lifecycle.
+- seek behavior.
+- track discovery.
+- track selection command forwarding.
+- shutdown cleanup.
 
 ---
 
@@ -607,10 +1036,15 @@ Required:
 
 Required:
 
-- migration v2 creation
-- playback history persistence
-- playback history update
-- playback history survives unavailable files
+- migration v2 creation on new database.
+- migration from Phase 1 v1 database to v2.
+- migration idempotency across reopen.
+- migration rollback on failure.
+- read-only store does not attempt migration.
+- playback history persistence.
+- playback history update/upsert.
+- unique `(media_item_id, media_file_id)` behavior.
+- playback history survives unavailable files.
 
 ---
 
@@ -618,9 +1052,35 @@ Required:
 
 Required:
 
-- playback use-case orchestration
-- progress save coordination
-- resume behavior
+- `OpenMediaUseCase` resolves a playable file from `media_file_id`.
+- unavailable media file is rejected.
+- unavailable folder is rejected or mapped to recoverable error.
+- missing resolved file is rejected.
+- no-history resume starts at beginning.
+- completed-history resume starts at beginning.
+- valid in-progress history resumes.
+- near-beginning history starts at beginning.
+- near-end history starts at beginning.
+- progress save throttling.
+- immediate save on pause/seek/stop/end.
+- play count increments once per session.
+
+---
+
+## LibMPV Smoke Validation
+
+Optional automated/manual smoke validation:
+
+```text
+CINEMIND_RUN_MPV_SMOKE=1
+```
+
+Rules:
+
+- Real mpv smoke tests may be skipped when libmpv is unavailable.
+- Unit tests must not require large media fixtures.
+- A tiny local sample video may be used for manual validation if available.
+- Manual validation must record whether visible video output was confirmed.
 
 ---
 
@@ -629,62 +1089,81 @@ Required:
 Required:
 
 ```text
-play local file
+confirm Homebrew/system libmpv is available
+play local file with --file
+confirm visible video output
 pause
 seek
 resume
+stop
+play library media with --db --media-file-id
 close playback
-reopen playback
+reopen same media
 verify progress restored
+play to end
+reopen same media
+verify completed media starts from beginning
 ```
 
 ---
 
-# 14. Explicitly Deferred
+# 15. Explicitly Deferred
 
 Deferred beyond Phase 2:
 
 ```text
 TMDB
 subtitle downloads
+local subtitle discovery workflows
 AI
 playlist system
 next episode autoplay
 recommendation engine
 advanced player UI
+embedded SwiftUI/AppKit player chrome
 streaming/server features
 plugin runtime
 real-time sync
+vendored mpv xcframework packaging
+Mac App Store packaging
 ```
 
 ---
 
-# 15. Success Criteria
+# 16. Success Criteria
 
 Phase 2 is complete only if:
 
 ```text
-✅ libmpv playback works
-✅ PlaybackCoordinator manages lifecycle
-✅ playback events flow correctly
-✅ playback progress persists
-✅ resume playback works
-✅ no UI coupling to libmpv
-✅ tests pass
-✅ no out-of-scope features added
+libmpv playback works with visible video output
+Playback target builds and tests without requiring real mpv
+LibMPVPlayback isolates raw mpv APIs
+OpenMediaUseCase resolves persisted MediaFile safely
+PlaybackCoordinator manages one active lifecycle
+playback state transitions are tested
+playback events flow correctly
+playback progress persists
+resume playback works
+completed playback starts from beginning
+track list is discovered when available
+backend track selection commands exist
+no UI coupling to libmpv
+no Playback -> Persistence dependency
+tests pass
+no out-of-scope features added
 ```
 
 ---
 
-# 16. Future Direction
+# 17. Future Direction
 
 After Phase 2, likely next phases:
 
 ```text
-Phase 3 → Metadata MVP (TMDB)
-Phase 4 → Search + FTS
-Phase 5 → Subtitle system
-Phase 6 → AI semantic search
+Phase 3 -> Metadata MVP (TMDB)
+Phase 4 -> Search + FTS
+Phase 5 -> Subtitle system
+Phase 6 -> AI semantic search
 ```
 
 Playback must remain stable and isolated before metadata/AI expansion.
@@ -692,4 +1171,3 @@ Playback must remain stable and isolated before metadata/AI expansion.
 ---
 
 # End of Phase 2
-

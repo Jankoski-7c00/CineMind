@@ -12,7 +12,11 @@ let package = Package(
         .library(name: "Domain", targets: ["Domain"]),
         .library(name: "Persistence", targets: ["Persistence"]),
         .library(name: "Scanner", targets: ["Scanner"]),
-        .executable(name: "CineMindShell", targets: ["CineMindShell"])
+        .library(name: "Application", targets: ["Application"]),
+        .library(name: "Playback", targets: ["Playback"]),
+        .library(name: "LibMPVPlayback", targets: ["LibMPVPlayback"]),
+        .executable(name: "CineMindShell", targets: ["CineMindShell"]),
+        .executable(name: "CineMindPlaybackShell", targets: ["CineMindPlaybackShell"])
     ],
     targets: [
         .target(name: "Shared"),
@@ -31,9 +35,32 @@ let package = Package(
             name: "Scanner",
             dependencies: ["Domain", "Persistence", "Shared"]
         ),
+        .target(
+            name: "Playback",
+            dependencies: ["Domain", "Shared"]
+        ),
+        .target(
+            name: "Application",
+            dependencies: ["Domain", "Persistence", "Playback", "Shared"]
+        ),
+        .systemLibrary(
+            name: "CLibMPV",
+            pkgConfig: "mpv",
+            providers: [
+                .brew(["mpv"])
+            ]
+        ),
+        .target(
+            name: "LibMPVPlayback",
+            dependencies: ["Playback", "CLibMPV"]
+        ),
         .executableTarget(
             name: "CineMindShell",
             dependencies: ["Domain", "Persistence"]
+        ),
+        .executableTarget(
+            name: "CineMindPlaybackShell",
+            dependencies: ["Application", "Playback", "LibMPVPlayback", "Shared"]
         ),
         .testTarget(
             name: "DomainTests",
@@ -46,6 +73,14 @@ let package = Package(
         .testTarget(
             name: "ScannerTests",
             dependencies: ["Scanner", "Persistence", "Domain"]
+        ),
+        .testTarget(
+            name: "ApplicationTests",
+            dependencies: ["Application"]
+        ),
+        .testTarget(
+            name: "PlaybackTests",
+            dependencies: ["Playback"]
         )
     ]
 )
