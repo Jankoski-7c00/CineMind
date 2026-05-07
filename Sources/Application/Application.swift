@@ -44,15 +44,7 @@ public struct PlayableFile: Sendable, Equatable {
     }
 }
 
-public protocol ApplicationPlaybackStore {
-    func fetchLibrary() throws -> Library?
-    func fetchLibraryFolders(libraryID: LibraryID) throws -> [LibraryFolder]
-    func fetchMediaItems() throws -> [MediaItem]
-    func fetchMediaFiles(mediaItemID: MediaItemID) throws -> [MediaFile]
-    func fetchPlaybackHistory(
-        mediaItemID: MediaItemID,
-        mediaFileID: MediaFileID
-    ) throws -> PlaybackHistory?
+public protocol PlaybackProgressStore {
     func savePlaybackProgress(
         mediaItemID: MediaItemID,
         mediaFileID: MediaFileID,
@@ -66,6 +58,17 @@ public protocol ApplicationPlaybackStore {
         mediaFileID: MediaFileID,
         playedAt: Date
     ) throws
+}
+
+public protocol ApplicationPlaybackStore: PlaybackProgressStore {
+    func fetchLibrary() throws -> Library?
+    func fetchLibraryFolders(libraryID: LibraryID) throws -> [LibraryFolder]
+    func fetchMediaItems() throws -> [MediaItem]
+    func fetchMediaFiles(mediaItemID: MediaItemID) throws -> [MediaFile]
+    func fetchPlaybackHistory(
+        mediaItemID: MediaItemID,
+        mediaFileID: MediaFileID
+    ) throws -> PlaybackHistory?
 }
 
 extension CineMindStore: ApplicationPlaybackStore {}
@@ -260,10 +263,10 @@ public enum PlaybackCompletionPolicy {
     }
 }
 
-public struct PlaybackProgressUseCase {
-    private let store: any ApplicationPlaybackStore
+public struct PlaybackProgressUseCase: @unchecked Sendable {
+    private let store: any PlaybackProgressStore
 
-    public init(store: any ApplicationPlaybackStore) {
+    public init(store: any PlaybackProgressStore) {
         self.store = store
     }
 

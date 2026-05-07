@@ -15,13 +15,19 @@ enum CineMindPlaybackShell {
                 printUsage()
             case .directFile(let path):
                 let playableFile = try makeDirectPlayableFile(path: path)
-                try await runPlayback(playableFile: playableFile)
+                try await runPlayback(
+                    playableFile: playableFile,
+                    progressCoordinator: nil
+                )
             case .library(let databasePath, let mediaFileID):
-                let playableFile = try makeLibraryPlayableFile(
+                let context = try makeLibraryPlaybackContext(
                     databasePath: databasePath,
                     mediaFileID: mediaFileID
                 )
-                try await runPlayback(playableFile: playableFile)
+                try await runPlayback(
+                    playableFile: context.playableFile,
+                    progressCoordinator: context.progressCoordinator
+                )
             }
         } catch let error as ShellError {
             writeError(error.description)
@@ -35,7 +41,10 @@ enum CineMindPlaybackShell {
         }
     }
 
-    private static func runPlayback(playableFile: Playback.PlayableFile) async throws {
+    private static func runPlayback(
+        playableFile: Playback.PlayableFile,
+        progressCoordinator: PlaybackProgressCoordinator?
+    ) async throws {
         let backend = try LibMPVPlaybackBackend()
         let coordinator = PlaybackCoordinator(backend: backend)
         let stateStore = PlaybackShellState()
@@ -47,22 +56,34 @@ enum CineMindPlaybackShell {
         }
         print("Commands: p, s, q, seek +10, seek -10")
 
+        await progressCoordinator?.startSession(
+            mediaItemID: playableFile.mediaItemID,
+            mediaFileID: playableFile.mediaFileID,
+            initialPositionMS: playableFile.resumePositionMS ?? 0
+        )
+
         let eventTask = Task {
             await consumeEvents(
                 coordinator: coordinator,
-                stateStore: stateStore
+                stateStore: stateStore,
+                progressCoordinator: progressCoordinator
             )
         }
 
         await coordinator.open(playableFile)
-        await runCommandLoop(coordinator: coordinator, stateStore: stateStore)
+        await runCommandLoop(
+            coordinator: coordinator,
+            stateStore: stateStore,
+            progressCoordinator: progressCoordinator
+        )
         eventTask.cancel()
         _ = await eventTask.result
     }
 
     private static func consumeEvents(
         coordinator: PlaybackCoordinator,
-        stateStore: PlaybackShellState
+        stateStore: PlaybackShellState,
+        progressCoordinator: PlaybackProgressCoordinator?
     ) async {
         var didRequestInitialPlay = false
         var lastPositionPrintTime = Date.distantPast
@@ -74,6 +95,7 @@ enum CineMindPlaybackShell {
             }
 
             await stateStore.apply(event)
+            await persistProgress(event, progressCoordinator: progressCoordinator)
 
             switch event {
             case .stateChanged(let state):
@@ -118,7 +140,8 @@ enum CineMindPlaybackShell {
 
     private static func runCommandLoop(
         coordinator: PlaybackCoordinator,
-        stateStore: PlaybackShellState
+        stateStore: PlaybackShellState,
+        progressCoordinator: PlaybackProgressCoordinator?
     ) async {
         while let rawLine = readLine() {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -129,20 +152,28 @@ enum CineMindPlaybackShell {
             if await handleCommand(
                 line,
                 coordinator: coordinator,
-                stateStore: stateStore
+                stateStore: stateStore,
+                progressCoordinator: progressCoordinator
             ) {
-                await shutdown(coordinator)
+                await shutdown(
+                    coordinator: coordinator,
+                    progressCoordinator: progressCoordinator
+                )
                 return
             }
         }
 
-        await shutdown(coordinator)
+        await shutdown(
+            coordinator: coordinator,
+            progressCoordinator: progressCoordinator
+        )
     }
 
     private static func handleCommand(
         _ line: String,
         coordinator: PlaybackCoordinator,
-        stateStore: PlaybackShellState
+        stateStore: PlaybackShellState,
+        progressCoordinator: PlaybackProgressCoordinator?
     ) async -> Bool {
         switch line {
         case "q", "quit":
@@ -156,7 +187,8 @@ enum CineMindPlaybackShell {
                 await handleSeek(
                     line,
                     coordinator: coordinator,
-                    stateStore: stateStore
+                    stateStore: stateStore,
+                    progressCoordinator: progressCoordinator
                 )
             } else {
                 print("Unknown command: \(line)")
@@ -190,7 +222,8 @@ enum CineMindPlaybackShell {
     private static func handleSeek(
         _ line: String,
         coordinator: PlaybackCoordinator,
-        stateStore: PlaybackShellState
+        stateStore: PlaybackShellState,
+        progressCoordinator: PlaybackProgressCoordinator?
     ) async {
         let parts = line.split(separator: " ", omittingEmptySubsequences: true)
         guard parts.count == 2, let seconds = Int(parts[1]) else {
@@ -212,13 +245,25 @@ enum CineMindPlaybackShell {
                 targetMS = min(targetMS, durationMS)
             }
             print("Seek: \(formatTime(milliseconds: targetMS))")
+            await progressCoordinator?.noteSeekRequested()
             await coordinator.seek(toMS: targetMS)
         case .idle, .loading, .ended, .failed:
             print("Seek ignored while playback is \(state.label).")
         }
     }
 
-    private static func shutdown(_ coordinator: PlaybackCoordinator) async {
+    private static func shutdown(
+        coordinator: PlaybackCoordinator,
+        progressCoordinator: PlaybackProgressCoordinator?
+    ) async {
+        if let progressCoordinator {
+            do {
+                try await progressCoordinator.closeSession()
+            } catch {
+                writeWarning("Playback progress persistence warning: \(error)")
+            }
+        }
+
         let activeSession = await coordinator.activeSession
         if activeSession != nil {
             await coordinator.stop()
@@ -248,10 +293,10 @@ enum CineMindPlaybackShell {
         )
     }
 
-    private static func makeLibraryPlayableFile(
+    private static func makeLibraryPlaybackContext(
         databasePath: String,
         mediaFileID: String
-    ) throws -> Playback.PlayableFile {
+    ) throws -> LibraryPlaybackContext {
         let databaseURL = URL(fileURLWithPath: databasePath).standardizedFileURL
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             throw ShellError.databaseNotFound(databasePath)
@@ -259,7 +304,12 @@ enum CineMindPlaybackShell {
 
         let store = try CineMindStore(path: databaseURL.path)
         let applicationPlayableFile = try OpenMediaUseCase(store: store).open(mediaFileID: mediaFileID)
-        return mapToPlaybackPlayableFile(applicationPlayableFile)
+        return LibraryPlaybackContext(
+            playableFile: mapToPlaybackPlayableFile(applicationPlayableFile),
+            progressCoordinator: PlaybackProgressCoordinator(
+                progressUseCase: PlaybackProgressUseCase(store: store)
+            )
+        )
     }
 
     private static func mapToPlaybackPlayableFile(
@@ -288,6 +338,26 @@ enum CineMindPlaybackShell {
           seek -10      seek backward 10 seconds
         """)
     }
+
+    private static func persistProgress(
+        _ event: PlaybackEvent,
+        progressCoordinator: PlaybackProgressCoordinator?
+    ) async {
+        guard let progressCoordinator else {
+            return
+        }
+
+        do {
+            try await progressCoordinator.handle(event)
+        } catch {
+            writeWarning("Playback progress persistence warning: \(error)")
+        }
+    }
+}
+
+private struct LibraryPlaybackContext {
+    let playableFile: Playback.PlayableFile
+    let progressCoordinator: PlaybackProgressCoordinator
 }
 
 private actor PlaybackShellState {
@@ -531,4 +601,8 @@ private func formatTime(milliseconds: Int) -> String {
 
 private func writeError(_ message: String) {
     FileHandle.standardError.write(Data((message + "\n").utf8))
+}
+
+private func writeWarning(_ message: String) {
+    FileHandle.standardError.write(Data(("Warning: " + message + "\n").utf8))
 }
