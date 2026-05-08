@@ -28,34 +28,15 @@ actor MPVRuntime {
         let api = try MPVClientAPI()
         self.api = api
 
-        guard let handle = api.create() else {
-            throw PlaybackError.mpvUnavailable
-        }
-
-        self.handle = handle
-
         do {
-            try Self.setOption(api: api, handle: handle, "terminal", value: "no")
-            try Self.setOption(api: api, handle: handle, "config", value: "no")
-            try Self.setOption(api: api, handle: handle, "load-scripts", value: "no")
-            try Self.setOption(api: api, handle: handle, "idle", value: "yes")
-            try Self.setOption(api: api, handle: handle, "keep-open", value: "no")
-            try Self.setOption(api: api, handle: handle, "pause", value: "yes")
-            _ = api.setOptionString(handle, "hwdec", "auto-safe")
-
-            let initializeResult = api.initialize(handle)
-            guard initializeResult >= 0 else {
-                throw MPVMapper.playbackError(
-                    fromMPVCode: initializeResult,
-                    api: api,
-                    fallback: "mpv initialization failed"
-                )
-            }
-
+            let handle = try Self.createInitializedHandle(api: api)
+            self.handle = handle
             _ = api.requestLogMessages(handle, "no")
             try Self.observeProperties(api: api, handle: handle)
         } catch {
-            api.terminateDestroy(handle)
+            if let handle {
+                api.terminateDestroy(handle)
+            }
             self.handle = nil
             isDestroyed = true
             shouldRunEventLoop = false
@@ -438,6 +419,51 @@ actor MPVRuntime {
             Double(positionMS) / 1_000.0
         )
         try command(["seek", seconds, "absolute+exact"])
+    }
+
+    private static func createInitializedHandle(api: MPVClientAPI) throws -> UnsafeMutableRawPointer {
+        do {
+            return try createInitializedHandle(api: api, videoOutput: "gpu-next")
+        } catch {
+            return try createInitializedHandle(api: api, videoOutput: "gpu")
+        }
+    }
+
+    private static func createInitializedHandle(
+        api: MPVClientAPI,
+        videoOutput: String
+    ) throws -> UnsafeMutableRawPointer {
+        guard let handle = api.create() else {
+            throw PlaybackError.mpvUnavailable
+        }
+
+        do {
+            try setOption(api: api, handle: handle, "terminal", value: "no")
+            try setOption(api: api, handle: handle, "config", value: "no")
+            try setOption(api: api, handle: handle, "load-scripts", value: "no")
+            try setOption(api: api, handle: handle, "idle", value: "yes")
+            try setOption(api: api, handle: handle, "keep-open", value: "no")
+            try setOption(api: api, handle: handle, "pause", value: "yes")
+            // Phase 2 standalone shell smoke validation only; revisit for embedded rendering.
+            try setOption(api: api, handle: handle, "force-window", value: "yes")
+            try setOption(api: api, handle: handle, "video", value: "auto")
+            try setOption(api: api, handle: handle, "vo", value: videoOutput)
+            _ = api.setOptionString(handle, "hwdec", "auto-safe")
+
+            let initializeResult = api.initialize(handle)
+            guard initializeResult >= 0 else {
+                throw MPVMapper.playbackError(
+                    fromMPVCode: initializeResult,
+                    api: api,
+                    fallback: "mpv initialization failed"
+                )
+            }
+
+            return handle
+        } catch {
+            api.terminateDestroy(handle)
+            throw error
+        }
     }
 
     private static func setOption(
