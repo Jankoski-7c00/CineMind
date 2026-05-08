@@ -16,7 +16,8 @@ let package = Package(
         .library(name: "Playback", targets: ["Playback"]),
         .library(name: "LibMPVPlayback", targets: ["LibMPVPlayback"]),
         .executable(name: "CineMindShell", targets: ["CineMindShell"]),
-        .executable(name: "CineMindPlaybackShell", targets: ["CineMindPlaybackShell"])
+        .executable(name: "CineMindPlaybackShell", targets: ["CineMindPlaybackShell"]),
+        .executable(name: "CineMindPlaybackSurfaceSpike", targets: ["CineMindPlaybackSurfaceSpike"])
     ],
     targets: [
         .target(name: "Shared"),
@@ -61,6 +62,10 @@ let package = Package(
         .executableTarget(
             name: "CineMindPlaybackShell",
             dependencies: ["Application", "Playback", "LibMPVPlayback", "Shared"]
+        ),
+        .executableTarget(
+            name: "CineMindPlaybackSurfaceSpike",
+            dependencies: ["Playback", "LibMPVPlayback"]
         ),
         .testTarget(
             name: "DomainTests",

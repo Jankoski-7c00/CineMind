@@ -1,3 +1,4 @@
+@preconcurrency import AppKit
 import Foundation
 import Playback
 
@@ -9,15 +10,28 @@ public enum LibMPVPlaybackModule {
 public final class LibMPVPlaybackBackend: PlaybackBackend, @unchecked Sendable {
     private let eventHub = PlaybackEventHub()
     private let runtime: MPVRuntime
+    private let renderAdapter: MPVOpenGLRenderAdapter?
     private let eventLoopTask: Task<Void, Never>
 
     public var events: AsyncStream<PlaybackEvent> {
         eventHub.makeStream()
     }
 
-    public init() throws {
+    public convenience init() throws {
         let runtime = try MPVRuntime()
+        self.init(runtime: runtime, renderAdapter: nil)
+    }
+
+    @MainActor
+    public convenience init(spikeOpenGLView: NSOpenGLView) throws {
+        let runtime = try MPVRuntime(mode: .embedded)
+        let renderAdapter = MPVOpenGLRenderAdapter(openGLView: spikeOpenGLView, runtime: runtime)
+        self.init(runtime: runtime, renderAdapter: renderAdapter)
+    }
+
+    private init(runtime: MPVRuntime, renderAdapter: MPVOpenGLRenderAdapter?) {
         self.runtime = runtime
+        self.renderAdapter = renderAdapter
 
         let eventHub = self.eventHub
         self.eventLoopTask = Task {
@@ -32,6 +46,20 @@ public final class LibMPVPlaybackBackend: PlaybackBackend, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    @MainActor
+    public func prepareSpikeRenderSurface() async throws {
+        guard let renderAdapter else {
+            throw PlaybackError.invalidState("spike render surface is not configured")
+        }
+
+        try await renderAdapter.prepare()
+    }
+
+    @MainActor
+    public func renderSpikeSurfaceNow() {
+        renderAdapter?.renderNow()
     }
 
     public func load(playableFile: PlayableFile) async throws {
@@ -67,6 +95,7 @@ public final class LibMPVPlaybackBackend: PlaybackBackend, @unchecked Sendable {
     }
 
     public func shutdown() async {
+        await renderAdapter?.shutdown()
         await runtime.stopEventLoop()
         eventLoopTask.cancel()
         await eventLoopTask.value

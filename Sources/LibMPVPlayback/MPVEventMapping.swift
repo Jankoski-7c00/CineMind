@@ -100,7 +100,7 @@ struct MPVNodeList {
     var keys: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
 }
 
-final class MPVClientAPI {
+final class MPVClientAPI: @unchecked Sendable {
     private typealias Create = @convention(c) () -> UnsafeMutableRawPointer?
     private typealias Initialize = @convention(c) (UnsafeMutableRawPointer?) -> Int32
     private typealias TerminateDestroy = @convention(c) (UnsafeMutableRawPointer?) -> Void
@@ -319,12 +319,165 @@ final class MPVClientAPI {
         return String(cString: message)
     }
 
-    private static func symbol<T>(_ name: String, in library: UnsafeMutableRawPointer, as type: T.Type) throws -> T {
+    func loadRenderAPI() throws -> MPVRenderAPI {
+        try MPVRenderAPI(library: library)
+    }
+
+    fileprivate static func symbol<T>(_ name: String, in library: UnsafeMutableRawPointer, as type: T.Type) throws -> T {
         guard let rawSymbol = dlsym(library, name) else {
             throw PlaybackError.mpvUnavailable
         }
 
         return unsafeBitCast(rawSymbol, to: type)
+    }
+}
+
+typealias MPVRenderUpdateCallback = @convention(c) (UnsafeMutableRawPointer?) -> Void
+
+struct MPVRenderAPI: @unchecked Sendable {
+    typealias RenderContextCreate = @convention(c) (
+        UnsafeMutablePointer<UnsafeMutableRawPointer?>?,
+        UnsafeMutableRawPointer?,
+        UnsafeMutableRawPointer?
+    ) -> Int32
+    typealias RenderContextSetUpdateCallback = @convention(c) (
+        UnsafeMutableRawPointer?,
+        MPVRenderUpdateCallback?,
+        UnsafeMutableRawPointer?
+    ) -> Void
+    typealias RenderContextUpdate = @convention(c) (UnsafeMutableRawPointer?) -> UInt64
+    typealias RenderContextRender = @convention(c) (
+        UnsafeMutableRawPointer?,
+        UnsafeMutableRawPointer?
+    ) -> Int32
+    typealias RenderContextFree = @convention(c) (UnsafeMutableRawPointer?) -> Void
+
+    private let renderContextCreateFunction: RenderContextCreate
+    private let renderContextSetUpdateCallbackFunction: RenderContextSetUpdateCallback
+    private let renderContextUpdateFunction: RenderContextUpdate
+    private let renderContextRenderFunction: RenderContextRender
+    private let renderContextFreeFunction: RenderContextFree
+
+    init(library: UnsafeMutableRawPointer) throws {
+        renderContextCreateFunction = try MPVClientAPI.symbol(
+            "mpv_render_context_create",
+            in: library,
+            as: RenderContextCreate.self
+        )
+        renderContextSetUpdateCallbackFunction = try MPVClientAPI.symbol(
+            "mpv_render_context_set_update_callback",
+            in: library,
+            as: RenderContextSetUpdateCallback.self
+        )
+        renderContextUpdateFunction = try MPVClientAPI.symbol(
+            "mpv_render_context_update",
+            in: library,
+            as: RenderContextUpdate.self
+        )
+        renderContextRenderFunction = try MPVClientAPI.symbol(
+            "mpv_render_context_render",
+            in: library,
+            as: RenderContextRender.self
+        )
+        renderContextFreeFunction = try MPVClientAPI.symbol(
+            "mpv_render_context_free",
+            in: library,
+            as: RenderContextFree.self
+        )
+    }
+
+    func renderContextCreate(
+        result: UnsafeMutablePointer<UnsafeMutableRawPointer?>?,
+        handle: UnsafeMutableRawPointer?,
+        params: UnsafeMutableRawPointer?
+    ) -> Int32 {
+        renderContextCreateFunction(result, handle, params)
+    }
+
+    func setUpdateCallback(
+        context: UnsafeMutableRawPointer?,
+        callback: MPVRenderUpdateCallback?,
+        callbackContext: UnsafeMutableRawPointer?
+    ) {
+        renderContextSetUpdateCallbackFunction(context, callback, callbackContext)
+    }
+
+    func update(context: UnsafeMutableRawPointer?) -> UInt64 {
+        renderContextUpdateFunction(context)
+    }
+
+    func render(context: UnsafeMutableRawPointer?, params: UnsafeMutableRawPointer?) -> Int32 {
+        renderContextRenderFunction(context, params)
+    }
+
+    func free(context: UnsafeMutableRawPointer?) {
+        renderContextFreeFunction(context)
+    }
+}
+
+struct MPVEmbeddedRenderProbeResult: Sendable, Equatable {
+    let renderSymbolsResolved: Bool
+    let embeddedHandleInitialized: Bool
+}
+
+enum MPVEmbeddedRenderAvailabilityProbe {
+    static func run() throws -> MPVEmbeddedRenderProbeResult {
+        let api = try MPVClientAPI()
+        _ = try api.loadRenderAPI()
+        let handle = try makeInitializedEmbeddedHandle(api: api)
+        api.terminateDestroy(handle)
+
+        return MPVEmbeddedRenderProbeResult(
+            renderSymbolsResolved: true,
+            embeddedHandleInitialized: true
+        )
+    }
+
+    private static func makeInitializedEmbeddedHandle(api: MPVClientAPI) throws -> UnsafeMutableRawPointer {
+        guard let handle = api.create() else {
+            throw PlaybackError.mpvUnavailable
+        }
+
+        do {
+            try setOption(api: api, handle: handle, "terminal", value: "no")
+            try setOption(api: api, handle: handle, "config", value: "no")
+            try setOption(api: api, handle: handle, "load-scripts", value: "no")
+            try setOption(api: api, handle: handle, "idle", value: "yes")
+            try setOption(api: api, handle: handle, "keep-open", value: "no")
+            try setOption(api: api, handle: handle, "pause", value: "yes")
+            try setOption(api: api, handle: handle, "video", value: "auto")
+            try setOption(api: api, handle: handle, "vo", value: "libmpv")
+
+            let initializeResult = api.initialize(handle)
+            guard initializeResult >= 0 else {
+                throw MPVMapper.playbackError(
+                    fromMPVCode: initializeResult,
+                    api: api,
+                    fallback: "embedded mpv initialization probe failed"
+                )
+            }
+
+            return handle
+        } catch {
+            api.terminateDestroy(handle)
+            throw error
+        }
+    }
+
+    private static func setOption(
+        api: MPVClientAPI,
+        handle: UnsafeMutableRawPointer,
+        _ name: String,
+        value: String
+    ) throws {
+        let result = api.setOptionString(handle, name, value)
+        guard result >= 0 else {
+            throw MPVMapper.playbackError(
+                fromMPVCode: result,
+                api: api,
+                fallback: "failed to set embedded mpv probe option \(name)"
+            )
+        }
     }
 }
 

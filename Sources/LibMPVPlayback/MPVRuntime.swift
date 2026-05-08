@@ -24,12 +24,12 @@ actor MPVRuntime {
         shouldRunEventLoop
     }
 
-    init() throws {
+    init(mode: MPVRuntimeMode = .standalone) throws {
         let api = try MPVClientAPI()
         self.api = api
 
         do {
-            let handle = try Self.createInitializedHandle(api: api)
+            let handle = try Self.createInitializedHandle(api: api, mode: mode)
             self.handle = handle
             _ = api.requestLogMessages(handle, "no")
             try Self.observeProperties(api: api, handle: handle)
@@ -137,6 +137,19 @@ actor MPVRuntime {
         isDestroyed = true
         shouldRunEventLoop = false
         api.terminateDestroy(handle)
+    }
+
+    func withRenderCore<T: Sendable>(
+        _ body: @MainActor (MPVScopedRenderCore) throws -> T
+    ) async throws -> T {
+        try ensureUsableHandle()
+        guard let handle else {
+            throw PlaybackError.mpvUnavailable
+        }
+
+        let renderAPI = try api.loadRenderAPI()
+        let core = MPVScopedRenderCore(api: api, renderAPI: renderAPI, handle: handle)
+        return try await body(core)
     }
 
     private func observeProperties() throws {
@@ -421,17 +434,30 @@ actor MPVRuntime {
         try command(["seek", seconds, "absolute+exact"])
     }
 
-    private static func createInitializedHandle(api: MPVClientAPI) throws -> UnsafeMutableRawPointer {
+    private static func createInitializedHandle(
+        api: MPVClientAPI,
+        mode: MPVRuntimeMode
+    ) throws -> UnsafeMutableRawPointer {
+        switch mode {
+        case .standalone:
+            return try createStandaloneInitializedHandle(api: api)
+        case .embedded:
+            return try createInitializedHandle(api: api, videoOutput: "libmpv", forceWindow: false)
+        }
+    }
+
+    private static func createStandaloneInitializedHandle(api: MPVClientAPI) throws -> UnsafeMutableRawPointer {
         do {
-            return try createInitializedHandle(api: api, videoOutput: "gpu-next")
+            return try createInitializedHandle(api: api, videoOutput: "gpu-next", forceWindow: true)
         } catch {
-            return try createInitializedHandle(api: api, videoOutput: "gpu")
+            return try createInitializedHandle(api: api, videoOutput: "gpu", forceWindow: true)
         }
     }
 
     private static func createInitializedHandle(
         api: MPVClientAPI,
-        videoOutput: String
+        videoOutput: String,
+        forceWindow: Bool
     ) throws -> UnsafeMutableRawPointer {
         guard let handle = api.create() else {
             throw PlaybackError.mpvUnavailable
@@ -444,8 +470,10 @@ actor MPVRuntime {
             try setOption(api: api, handle: handle, "idle", value: "yes")
             try setOption(api: api, handle: handle, "keep-open", value: "no")
             try setOption(api: api, handle: handle, "pause", value: "yes")
-            // Phase 2 standalone shell smoke validation only; revisit for embedded rendering.
-            try setOption(api: api, handle: handle, "force-window", value: "yes")
+            if forceWindow {
+                // Phase 2 standalone shell smoke validation only; revisit for embedded rendering.
+                try setOption(api: api, handle: handle, "force-window", value: "yes")
+            }
             try setOption(api: api, handle: handle, "video", value: "auto")
             try setOption(api: api, handle: handle, "vo", value: videoOutput)
             _ = api.setOptionString(handle, "hwdec", "auto-safe")
@@ -552,6 +580,17 @@ actor MPVRuntime {
             throw PlaybackError.mpvUnavailable
         }
     }
+}
+
+enum MPVRuntimeMode {
+    case standalone
+    case embedded
+}
+
+struct MPVScopedRenderCore: @unchecked Sendable {
+    let api: MPVClientAPI
+    let renderAPI: MPVRenderAPI
+    let handle: UnsafeMutableRawPointer
 }
 
 enum MPVObservedProperty: UInt64 {
