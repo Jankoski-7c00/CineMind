@@ -19,6 +19,10 @@ internal enum SQLiteMigrator {
                 try apply(version: 2, statements: version2Statements, connection: connection)
                 applied.insert(2)
             }
+            if !applied.contains(3) {
+                try apply(version: 3, statements: version3Statements, connection: connection)
+                applied.insert(3)
+            }
         } catch {
             throw PersistenceError.migrationFailed(error.localizedDescription)
         }
@@ -180,6 +184,113 @@ internal enum SQLiteMigrator {
         """
         CREATE INDEX IF NOT EXISTS idx_playback_history_last_played_at
         ON playback_history(last_played_at)
+        """
+    ]
+
+    private static let version3Statements = [
+        """
+        CREATE TABLE IF NOT EXISTS metadata_items (
+            id TEXT PRIMARY KEY,
+            media_item_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE RESTRICT,
+            title TEXT,
+            original_title TEXT,
+            summary TEXT,
+            language TEXT,
+            release_date TEXT,
+            air_date TEXT,
+            title_override_locked INTEGER NOT NULL DEFAULT 0 CHECK(title_override_locked IN (0, 1)),
+            summary_override_locked INTEGER NOT NULL DEFAULT 0 CHECK(summary_override_locked IN (0, 1)),
+            language_override_locked INTEGER NOT NULL DEFAULT 0 CHECK(language_override_locked IN (0, 1)),
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            UNIQUE(media_item_id)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_metadata_items_media_item_id
+        ON metadata_items(media_item_id)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS metadata_external_ids (
+            id TEXT PRIMARY KEY,
+            media_item_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE RESTRICT,
+            provider TEXT NOT NULL CHECK(provider IN ('tmdb')),
+            external_id_type TEXT NOT NULL CHECK(external_id_type IN ('tmdb_movie', 'tmdb_tv_series', 'tmdb_episode', 'imdb')),
+            external_id_value TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            UNIQUE(media_item_id, provider, external_id_type)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_metadata_external_ids_media_item_id
+        ON metadata_external_ids(media_item_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_metadata_external_ids_lookup
+        ON metadata_external_ids(provider, external_id_type, external_id_value)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS metadata_source_records (
+            id TEXT PRIMARY KEY,
+            media_item_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE RESTRICT,
+            provider TEXT NOT NULL CHECK(provider IN ('tmdb')),
+            provider_id TEXT NOT NULL,
+            provider_media_type TEXT NOT NULL CHECK(provider_media_type IN ('movie', 'episode')),
+            confidence REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),
+            match_source TEXT NOT NULL CHECK(match_source IN ('automatic', 'manual')),
+            manual_match_locked INTEGER NOT NULL DEFAULT 0 CHECK(manual_match_locked IN (0, 1)),
+            raw_payload_json TEXT,
+            matched_at REAL NOT NULL,
+            refreshed_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            UNIQUE(media_item_id, provider)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_metadata_source_records_media_item_id
+        ON metadata_source_records(media_item_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_metadata_source_records_provider_id
+        ON metadata_source_records(provider_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_metadata_source_records_refreshed_at
+        ON metadata_source_records(refreshed_at)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS poster_assets (
+            id TEXT PRIMARY KEY,
+            media_item_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE RESTRICT,
+            asset_type TEXT NOT NULL CHECK(asset_type IN ('poster')),
+            source TEXT NOT NULL CHECK(source IN ('tmdb')),
+            remote_path TEXT NOT NULL,
+            width INTEGER,
+            height INTEGER,
+            preferred_cache_size TEXT NOT NULL,
+            local_cache_path TEXT,
+            cached_at REAL,
+            is_selected INTEGER NOT NULL DEFAULT 0 CHECK(is_selected IN (0, 1)),
+            selection_source TEXT NOT NULL CHECK(selection_source IN ('automatic', 'manual')),
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            UNIQUE(media_item_id, asset_type, source, remote_path)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_poster_assets_media_item_id
+        ON poster_assets(media_item_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_poster_assets_remote_path
+        ON poster_assets(remote_path)
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_poster_assets_selected_unique
+        ON poster_assets(media_item_id, asset_type)
+        WHERE is_selected = 1
         """
     ]
 }

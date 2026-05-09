@@ -295,6 +295,313 @@ extension CineMindStore {
     }
 }
 
+// MARK: - Metadata
+
+extension CineMindStore {
+    public func fetchMetadataItem(mediaItemID: MediaItemID) throws -> MetadataItem? {
+        let statement = try connection.prepare(metadataItemSelectSQL + """
+             WHERE media_item_id = ?
+            LIMIT 1
+            """)
+        try statement.bind(mediaItemID, at: 1)
+
+        guard try statement.step() else {
+            return nil
+        }
+
+        return try mapMetadataItem(statement)
+    }
+
+    public func saveMetadataItem(_ item: MetadataItem) throws {
+        let statement = try connection.prepare("""
+            INSERT INTO metadata_items (
+                id, media_item_id, title, original_title, summary, language,
+                release_date, air_date, title_override_locked,
+                summary_override_locked, language_override_locked, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(media_item_id) DO UPDATE SET
+                id = excluded.id,
+                title = excluded.title,
+                original_title = excluded.original_title,
+                summary = excluded.summary,
+                language = excluded.language,
+                release_date = excluded.release_date,
+                air_date = excluded.air_date,
+                title_override_locked = excluded.title_override_locked,
+                summary_override_locked = excluded.summary_override_locked,
+                language_override_locked = excluded.language_override_locked,
+                updated_at = excluded.updated_at
+            """)
+        try bindMetadataItem(item, to: statement)
+        _ = try statement.step()
+    }
+
+    public func fetchMetadataExternalIDs(mediaItemID: MediaItemID) throws -> [MetadataExternalID] {
+        let statement = try connection.prepare(metadataExternalIDSelectSQL + """
+             WHERE media_item_id = ?
+            ORDER BY provider ASC, external_id_type ASC
+            """)
+        try statement.bind(mediaItemID, at: 1)
+
+        var externalIDs: [MetadataExternalID] = []
+        while try statement.step() {
+            externalIDs.append(try mapMetadataExternalID(statement))
+        }
+        return externalIDs
+    }
+
+    public func upsertMetadataExternalIDs(_ externalIDs: [MetadataExternalID]) throws {
+        try connection.transaction {
+            for externalID in externalIDs {
+                try externalID.validate()
+
+                let statement = try connection.prepare("""
+                    INSERT INTO metadata_external_ids (
+                        id, media_item_id, provider, external_id_type,
+                        external_id_value, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(media_item_id, provider, external_id_type) DO UPDATE SET
+                        external_id_value = excluded.external_id_value,
+                        updated_at = excluded.updated_at
+                    """)
+                try bindMetadataExternalID(externalID, to: statement)
+                _ = try statement.step()
+            }
+        }
+    }
+
+    public func fetchMetadataSourceRecord(
+        mediaItemID: MediaItemID,
+        provider: MetadataProviderName
+    ) throws -> MetadataSourceRecord? {
+        let statement = try connection.prepare(metadataSourceRecordSelectSQL + """
+             WHERE media_item_id = ? AND provider = ?
+            LIMIT 1
+            """)
+        try statement.bind(mediaItemID, at: 1)
+        try statement.bind(provider.rawValue, at: 2)
+
+        guard try statement.step() else {
+            return nil
+        }
+
+        return try mapMetadataSourceRecord(statement)
+    }
+
+    public func saveMetadataSourceRecord(_ record: MetadataSourceRecord) throws {
+        try record.validate()
+
+        let statement = try connection.prepare("""
+            INSERT INTO metadata_source_records (
+                id, media_item_id, provider, provider_id, provider_media_type,
+                confidence, match_source, manual_match_locked, raw_payload_json,
+                matched_at, refreshed_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(media_item_id, provider) DO UPDATE SET
+                id = excluded.id,
+                provider_id = excluded.provider_id,
+                provider_media_type = excluded.provider_media_type,
+                confidence = excluded.confidence,
+                match_source = excluded.match_source,
+                manual_match_locked = excluded.manual_match_locked,
+                raw_payload_json = excluded.raw_payload_json,
+                matched_at = excluded.matched_at,
+                refreshed_at = excluded.refreshed_at,
+                updated_at = excluded.updated_at
+            """)
+        try bindMetadataSourceRecord(record, to: statement)
+        _ = try statement.step()
+    }
+
+    public func fetchPosterAssets(mediaItemID: MediaItemID) throws -> [PosterAsset] {
+        let statement = try connection.prepare(posterAssetSelectSQL + """
+             WHERE media_item_id = ?
+            ORDER BY is_selected DESC, created_at ASC, remote_path ASC
+            """)
+        try statement.bind(mediaItemID, at: 1)
+
+        var assets: [PosterAsset] = []
+        while try statement.step() {
+            assets.append(try mapPosterAsset(statement))
+        }
+        return assets
+    }
+
+    public func savePosterAsset(_ asset: PosterAsset) throws {
+        try asset.validate()
+
+        if asset.isSelected {
+            try connection.transaction {
+                try unselectPosterAssets(
+                    mediaItemID: asset.mediaItemID,
+                    assetType: asset.assetType,
+                    excludingID: asset.id,
+                    updatedAt: asset.updatedAt
+                )
+                try upsertPosterAsset(asset)
+            }
+        } else {
+            try upsertPosterAsset(asset)
+        }
+    }
+
+    public func selectPosterAsset(
+        id: PosterAssetID,
+        mediaItemID: MediaItemID,
+        selectionSource: PosterSelectionSource
+    ) throws {
+        try connection.transaction {
+            let assetType = try posterAssetType(id: id, mediaItemID: mediaItemID)
+            let updatedAt = Date()
+            try unselectPosterAssets(
+                mediaItemID: mediaItemID,
+                assetType: assetType,
+                excludingID: id,
+                updatedAt: updatedAt
+            )
+
+            let statement = try connection.prepare("""
+                UPDATE poster_assets
+                SET is_selected = 1,
+                    selection_source = ?,
+                    updated_at = ?
+                WHERE id = ? AND media_item_id = ?
+                """)
+            try statement.bind(selectionSource.rawValue, at: 1)
+            try statement.bind(timestamp(updatedAt), at: 2)
+            try statement.bind(id, at: 3)
+            try statement.bind(mediaItemID, at: 4)
+            _ = try statement.step()
+        }
+    }
+
+    public func fetchMediaItemsMissingMetadata(limit: Int) throws -> [MediaItem] {
+        guard limit > 0 else {
+            return []
+        }
+
+        let statement = try connection.prepare("""
+            SELECT mi.id, mi.media_type, mi.title, mi.normalized_title, mi.year,
+                   mi.series_title, mi.season_number, mi.episode_number, mi.episode_title,
+                   mi.created_at, mi.updated_at
+            FROM media_items mi
+            LEFT JOIN metadata_items metadata
+              ON metadata.media_item_id = mi.id
+            WHERE metadata.id IS NULL
+            ORDER BY mi.created_at ASC
+            LIMIT ?
+            """)
+        try statement.bind(limit, at: 1)
+
+        var items: [MediaItem] = []
+        while try statement.step() {
+            items.append(try mapMediaItem(statement))
+        }
+        return items
+    }
+
+    public func fetchMediaItemsWithStaleMetadata(
+        olderThan threshold: Date,
+        limit: Int
+    ) throws -> [MediaItem] {
+        guard limit > 0 else {
+            return []
+        }
+
+        let statement = try connection.prepare("""
+            SELECT DISTINCT mi.id, mi.media_type, mi.title, mi.normalized_title, mi.year,
+                   mi.series_title, mi.season_number, mi.episode_number, mi.episode_title,
+                   mi.created_at, mi.updated_at
+            FROM media_items mi
+            INNER JOIN metadata_source_records source
+              ON source.media_item_id = mi.id
+            WHERE source.refreshed_at IS NULL
+               OR source.refreshed_at < ?
+            ORDER BY mi.created_at ASC
+            LIMIT ?
+            """)
+        try statement.bind(timestamp(threshold), at: 1)
+        try statement.bind(limit, at: 2)
+
+        var items: [MediaItem] = []
+        while try statement.step() {
+            items.append(try mapMediaItem(statement))
+        }
+        return items
+    }
+
+    private func upsertPosterAsset(_ asset: PosterAsset) throws {
+        let statement = try connection.prepare("""
+            INSERT INTO poster_assets (
+                id, media_item_id, asset_type, source, remote_path, width, height,
+                preferred_cache_size, local_cache_path, cached_at, is_selected,
+                selection_source, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                media_item_id = excluded.media_item_id,
+                asset_type = excluded.asset_type,
+                source = excluded.source,
+                remote_path = excluded.remote_path,
+                width = excluded.width,
+                height = excluded.height,
+                preferred_cache_size = excluded.preferred_cache_size,
+                local_cache_path = excluded.local_cache_path,
+                cached_at = excluded.cached_at,
+                is_selected = excluded.is_selected,
+                selection_source = excluded.selection_source,
+                updated_at = excluded.updated_at
+            """)
+        try bindPosterAsset(asset, to: statement)
+        _ = try statement.step()
+    }
+
+    private func posterAssetType(
+        id: PosterAssetID,
+        mediaItemID: MediaItemID
+    ) throws -> PosterAssetType {
+        let statement = try connection.prepare("""
+            SELECT asset_type
+            FROM poster_assets
+            WHERE id = ? AND media_item_id = ?
+            LIMIT 1
+            """)
+        try statement.bind(id, at: 1)
+        try statement.bind(mediaItemID, at: 2)
+
+        guard try statement.step() else {
+            throw PersistenceError.posterAssetNotFound(id: id, mediaItemID: mediaItemID)
+        }
+
+        return PosterAssetType(rawValue: try requiredString(statement, 0)) ?? .poster
+    }
+
+    private func unselectPosterAssets(
+        mediaItemID: MediaItemID,
+        assetType: PosterAssetType,
+        excludingID: PosterAssetID,
+        updatedAt: Date
+    ) throws {
+        let statement = try connection.prepare("""
+            UPDATE poster_assets
+            SET is_selected = 0,
+                updated_at = ?
+            WHERE media_item_id = ?
+              AND asset_type = ?
+              AND id <> ?
+              AND is_selected = 1
+            """)
+        try statement.bind(timestamp(updatedAt), at: 1)
+        try statement.bind(mediaItemID, at: 2)
+        try statement.bind(assetType.rawValue, at: 3)
+        try statement.bind(excludingID, at: 4)
+        _ = try statement.step()
+    }
+}
+
 // MARK: - MediaFile
 
 extension CineMindStore {
@@ -743,6 +1050,71 @@ extension CineMindStore {
         try statement.bind(timestamp(history.updatedAt), at: 10)
     }
 
+    private func bindMetadataItem(_ item: MetadataItem, to statement: SQLiteStatement) throws {
+        try statement.bind(item.id, at: 1)
+        try statement.bind(item.mediaItemID, at: 2)
+        try statement.bind(item.title, at: 3)
+        try statement.bind(item.originalTitle, at: 4)
+        try statement.bind(item.summary, at: 5)
+        try statement.bind(item.language, at: 6)
+        try statement.bind(item.releaseDate, at: 7)
+        try statement.bind(item.airDate, at: 8)
+        try statement.bind(item.titleOverrideLocked, at: 9)
+        try statement.bind(item.summaryOverrideLocked, at: 10)
+        try statement.bind(item.languageOverrideLocked, at: 11)
+        try statement.bind(timestamp(item.createdAt), at: 12)
+        try statement.bind(timestamp(item.updatedAt), at: 13)
+    }
+
+    private func bindMetadataExternalID(
+        _ externalID: MetadataExternalID,
+        to statement: SQLiteStatement
+    ) throws {
+        try statement.bind(externalID.id, at: 1)
+        try statement.bind(externalID.mediaItemID, at: 2)
+        try statement.bind(externalID.provider.rawValue, at: 3)
+        try statement.bind(externalID.externalIDType.rawValue, at: 4)
+        try statement.bind(externalID.externalIDValue, at: 5)
+        try statement.bind(timestamp(externalID.createdAt), at: 6)
+        try statement.bind(timestamp(externalID.updatedAt), at: 7)
+    }
+
+    private func bindMetadataSourceRecord(
+        _ record: MetadataSourceRecord,
+        to statement: SQLiteStatement
+    ) throws {
+        try statement.bind(record.id, at: 1)
+        try statement.bind(record.mediaItemID, at: 2)
+        try statement.bind(record.provider.rawValue, at: 3)
+        try statement.bind(record.providerID, at: 4)
+        try statement.bind(record.providerMediaType.rawValue, at: 5)
+        try statement.bind(record.confidence, at: 6)
+        try statement.bind(record.matchSource.rawValue, at: 7)
+        try statement.bind(record.manualMatchLocked, at: 8)
+        try statement.bind(record.rawPayloadJSON, at: 9)
+        try statement.bind(timestamp(record.matchedAt), at: 10)
+        try statement.bind(timestamp(record.refreshedAt), at: 11)
+        try statement.bind(timestamp(record.createdAt), at: 12)
+        try statement.bind(timestamp(record.updatedAt), at: 13)
+    }
+
+    private func bindPosterAsset(_ asset: PosterAsset, to statement: SQLiteStatement) throws {
+        try statement.bind(asset.id, at: 1)
+        try statement.bind(asset.mediaItemID, at: 2)
+        try statement.bind(asset.assetType.rawValue, at: 3)
+        try statement.bind(asset.source.rawValue, at: 4)
+        try statement.bind(asset.remotePath, at: 5)
+        try statement.bind(asset.width, at: 6)
+        try statement.bind(asset.height, at: 7)
+        try statement.bind(asset.preferredCacheSize, at: 8)
+        try statement.bind(asset.localCachePath, at: 9)
+        try statement.bind(timestamp(asset.cachedAt), at: 10)
+        try statement.bind(asset.isSelected, at: 11)
+        try statement.bind(asset.selectionSource.rawValue, at: 12)
+        try statement.bind(timestamp(asset.createdAt), at: 13)
+        try statement.bind(timestamp(asset.updatedAt), at: 14)
+    }
+
     private func mapLibrary(_ statement: SQLiteStatement) throws -> Library {
         Library(
             id: try requiredString(statement, 0),
@@ -830,6 +1202,73 @@ extension CineMindStore {
             lastPlayedAt: try requiredDate(statement, 7),
             createdAt: try requiredDate(statement, 8),
             updatedAt: try requiredDate(statement, 9)
+        )
+    }
+
+    private func mapMetadataItem(_ statement: SQLiteStatement) throws -> MetadataItem {
+        MetadataItem(
+            id: try requiredString(statement, 0),
+            mediaItemID: try requiredString(statement, 1),
+            title: statement.string(at: 2),
+            originalTitle: statement.string(at: 3),
+            summary: statement.string(at: 4),
+            language: statement.string(at: 5),
+            releaseDate: statement.string(at: 6),
+            airDate: statement.string(at: 7),
+            titleOverrideLocked: try requiredStrictBool(statement, 8),
+            summaryOverrideLocked: try requiredStrictBool(statement, 9),
+            languageOverrideLocked: try requiredStrictBool(statement, 10),
+            createdAt: try requiredDate(statement, 11),
+            updatedAt: try requiredDate(statement, 12)
+        )
+    }
+
+    private func mapMetadataExternalID(_ statement: SQLiteStatement) throws -> MetadataExternalID {
+        MetadataExternalID(
+            id: try requiredString(statement, 0),
+            mediaItemID: try requiredString(statement, 1),
+            provider: MetadataProviderName(rawValue: try requiredString(statement, 2)) ?? .tmdb,
+            externalIDType: MetadataExternalIDType(rawValue: try requiredString(statement, 3)) ?? .imdb,
+            externalIDValue: try requiredString(statement, 4),
+            createdAt: try requiredDate(statement, 5),
+            updatedAt: try requiredDate(statement, 6)
+        )
+    }
+
+    private func mapMetadataSourceRecord(_ statement: SQLiteStatement) throws -> MetadataSourceRecord {
+        MetadataSourceRecord(
+            id: try requiredString(statement, 0),
+            mediaItemID: try requiredString(statement, 1),
+            provider: MetadataProviderName(rawValue: try requiredString(statement, 2)) ?? .tmdb,
+            providerID: try requiredString(statement, 3),
+            providerMediaType: MetadataProviderMediaType(rawValue: try requiredString(statement, 4)) ?? .movie,
+            confidence: statement.double(at: 5) ?? 0.0,
+            matchSource: MetadataMatchSource(rawValue: try requiredString(statement, 6)) ?? .automatic,
+            manualMatchLocked: try requiredStrictBool(statement, 7),
+            rawPayloadJSON: statement.string(at: 8),
+            matchedAt: try requiredDate(statement, 9),
+            refreshedAt: date(statement.double(at: 10)),
+            createdAt: try requiredDate(statement, 11),
+            updatedAt: try requiredDate(statement, 12)
+        )
+    }
+
+    private func mapPosterAsset(_ statement: SQLiteStatement) throws -> PosterAsset {
+        PosterAsset(
+            id: try requiredString(statement, 0),
+            mediaItemID: try requiredString(statement, 1),
+            assetType: PosterAssetType(rawValue: try requiredString(statement, 2)) ?? .poster,
+            source: PosterAssetSource(rawValue: try requiredString(statement, 3)) ?? .tmdb,
+            remotePath: try requiredString(statement, 4),
+            width: statement.int(at: 5),
+            height: statement.int(at: 6),
+            preferredCacheSize: try requiredString(statement, 7),
+            localCachePath: statement.string(at: 8),
+            cachedAt: date(statement.double(at: 9)),
+            isSelected: try requiredStrictBool(statement, 10),
+            selectionSource: PosterSelectionSource(rawValue: try requiredString(statement, 11)) ?? .automatic,
+            createdAt: try requiredDate(statement, 12),
+            updatedAt: try requiredDate(statement, 13)
         )
     }
 
@@ -922,6 +1361,33 @@ private let playbackHistorySelectSQL = """
     SELECT id, media_item_id, media_file_id, position_ms, duration_ms,
            completed, play_count, last_played_at, created_at, updated_at
     FROM playback_history
+    """
+
+private let metadataItemSelectSQL = """
+    SELECT id, media_item_id, title, original_title, summary, language,
+           release_date, air_date, title_override_locked, summary_override_locked,
+           language_override_locked, created_at, updated_at
+    FROM metadata_items
+    """
+
+private let metadataExternalIDSelectSQL = """
+    SELECT id, media_item_id, provider, external_id_type, external_id_value,
+           created_at, updated_at
+    FROM metadata_external_ids
+    """
+
+private let metadataSourceRecordSelectSQL = """
+    SELECT id, media_item_id, provider, provider_id, provider_media_type,
+           confidence, match_source, manual_match_locked, raw_payload_json,
+           matched_at, refreshed_at, created_at, updated_at
+    FROM metadata_source_records
+    """
+
+private let posterAssetSelectSQL = """
+    SELECT id, media_item_id, asset_type, source, remote_path, width, height,
+           preferred_cache_size, local_cache_path, cached_at, is_selected,
+           selection_source, created_at, updated_at
+    FROM poster_assets
     """
 
 private let scanRunSelectSQL = """

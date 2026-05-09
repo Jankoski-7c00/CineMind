@@ -14,6 +14,7 @@ public enum PersistenceError: Error, Sendable, Equatable, CustomStringConvertibl
         actualMediaItemID: String
     )
     case duplicatePlaybackHistoryPair(existingID: String, attemptedID: String)
+    case posterAssetNotFound(id: String, mediaItemID: String)
 
     public var description: String {
         switch self {
@@ -33,6 +34,8 @@ public enum PersistenceError: Error, Sendable, Equatable, CustomStringConvertibl
             "mediaFileMediaItemMismatch(mediaItemID: \(mediaItemID), mediaFileID: \(mediaFileID), actualMediaItemID: \(actualMediaItemID))"
         case .duplicatePlaybackHistoryPair(let existingID, let attemptedID):
             "duplicatePlaybackHistoryPair(existingID: \(existingID), attemptedID: \(attemptedID))"
+        case .posterAssetNotFound(let id, let mediaItemID):
+            "posterAssetNotFound(id: \(id), mediaItemID: \(mediaItemID))"
         }
     }
 }

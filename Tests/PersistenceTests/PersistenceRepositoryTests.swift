@@ -35,13 +35,17 @@ final class PersistenceRepositoryTests: XCTestCase {
                 "library_folders",
                 "media_items",
                 "media_files",
+                "metadata_external_ids",
+                "metadata_items",
+                "metadata_source_records",
+                "poster_assets",
                 "playback_history",
                 "scan_runs",
                 "scan_issues",
                 "schema_migrations"
             ]
         )
-        XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2])
+        XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3])
     }
 
     func testMigrationIsIdempotentAcrossReopen() throws {
@@ -49,19 +53,20 @@ final class PersistenceRepositoryTests: XCTestCase {
         do {
             let store = try makeStore()
             firstTables = try store.schemaTableNames()
-            XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2])
+            XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3])
         }
 
         let reopened = try makeStore()
         XCTAssertEqual(try reopened.schemaTableNames(), firstTables)
-        XCTAssertEqual(try reopened.appliedMigrationVersions(), [1, 2])
+        XCTAssertEqual(try reopened.appliedMigrationVersions(), [1, 2, 3])
     }
 
-    func testV1DatabaseUpgradesToV2WithoutDataLoss() throws {
+    func testV1DatabaseUpgradesThroughV2ToV3WithoutDataLoss() throws {
         let libraryID: LibraryID
         let folderID: LibraryFolderID
         let itemID: MediaItemID
         let fileID: MediaFileID
+        let scanRunID: ScanRunID
         let relativePath = "Arrival (2016).mkv"
 
         do {
@@ -80,15 +85,39 @@ final class PersistenceRepositoryTests: XCTestCase {
                 absolutePathHash: "arrival-path-hash",
                 fileSizeBytes: 1024
             )
+            let scanRun = try store.createScanRun(
+                libraryID: library.id,
+                startedAt: Date(timeIntervalSince1970: 700)
+            )
+            let issue = ScanIssue(
+                scanRunID: scanRun.id,
+                libraryFolderID: folder.id,
+                pathHash: "arrival-path-hash",
+                issueType: .metadataParseFailed,
+                message: "Scanner diagnostic",
+                createdAt: Date(timeIntervalSince1970: 710)
+            )
 
             try store.addLibraryFolder(folder)
             try store.saveMediaItem(item)
             try store.saveMediaFile(file)
+            try store.finishScanRun(
+                id: scanRun.id,
+                finishedAt: Date(timeIntervalSince1970: 800),
+                status: .completed,
+                filesSeen: 1,
+                filesAdded: 1,
+                filesUpdated: 0,
+                filesMissing: 0,
+                issuesCount: 1
+            )
+            try store.recordScanIssue(issue)
 
             libraryID = library.id
             folderID = folder.id
             itemID = item.id
             fileID = file.id
+            scanRunID = scanRun.id
         }
 
         try removeV2SchemaObjects()
@@ -96,8 +125,9 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("playback_history"))
 
         let upgraded = try makeStore()
-        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2])
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3])
         XCTAssertTrue(try upgraded.schemaTableNames().contains("playback_history"))
+        XCTAssertTrue(try upgraded.schemaTableNames().contains("metadata_items"))
         XCTAssertEqual(try upgraded.fetchLibrary(id: libraryID)?.name, "Local")
         XCTAssertEqual(try upgraded.fetchLibraryFolders(libraryID: libraryID).map(\.id), [folderID])
         XCTAssertEqual(try upgraded.fetchMediaItem(id: itemID)?.title, "Arrival")
@@ -107,6 +137,94 @@ final class PersistenceRepositoryTests: XCTestCase {
                 relativePath: relativePath
             )?.id,
             fileID
+        )
+        XCTAssertEqual(try upgraded.fetchScanRun(id: scanRunID)?.status, .completed)
+        XCTAssertEqual(try upgraded.fetchScanIssues(scanRunID: scanRunID).count, 1)
+    }
+
+    func testV2DatabaseUpgradesToV3WithoutDataLoss() throws {
+        let libraryID: LibraryID
+        let folderID: LibraryFolderID
+        let itemID: MediaItemID
+        let fileID: MediaFileID
+        let scanRunID: ScanRunID
+        let playback = PlaybackHistory(
+            id: "history-v2-upgrade",
+            mediaItemID: "placeholder-item",
+            mediaFileID: "placeholder-file",
+            positionMS: 42_000,
+            completed: false,
+            playCount: 2,
+            lastPlayedAt: Date(timeIntervalSince1970: 1_000),
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let relativePath = "Arrival (2016).mkv"
+
+        do {
+            let context = try makePlaybackContext()
+            let run = try context.store.createScanRun(libraryID: context.library.id)
+            let issue = ScanIssue(
+                scanRunID: run.id,
+                libraryFolderID: context.folder.id,
+                pathHash: "arrival-path-hash",
+                issueType: .folderUnavailable,
+                message: "Unavailable during scan",
+                createdAt: Date(timeIntervalSince1970: 1_100)
+            )
+            let savedPlayback = PlaybackHistory(
+                id: playback.id,
+                mediaItemID: context.item.id,
+                mediaFileID: context.file.id,
+                positionMS: playback.positionMS,
+                completed: playback.completed,
+                playCount: playback.playCount,
+                lastPlayedAt: playback.lastPlayedAt,
+                createdAt: playback.createdAt,
+                updatedAt: playback.updatedAt
+            )
+
+            try context.store.finishScanRun(
+                id: run.id,
+                finishedAt: Date(timeIntervalSince1970: 1_200),
+                status: .completed,
+                filesSeen: 1,
+                filesAdded: 0,
+                filesUpdated: 1,
+                filesMissing: 0,
+                issuesCount: 1
+            )
+            try context.store.recordScanIssue(issue)
+            try context.store.savePlaybackHistory(savedPlayback)
+
+            libraryID = context.library.id
+            folderID = context.folder.id
+            itemID = context.item.id
+            fileID = context.file.id
+            scanRunID = run.id
+        }
+
+        try removeV3SchemaObjects()
+        XCTAssertEqual(try RawSQLiteFixture.migrationVersions(path: databaseURL.path), [1, 2])
+        XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("metadata_items"))
+
+        let upgraded = try makeStore()
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3])
+        XCTAssertEqual(try upgraded.fetchLibrary(id: libraryID)?.name, "CineMind Library")
+        XCTAssertEqual(try upgraded.fetchLibraryFolders(libraryID: libraryID).map(\.id), [folderID])
+        XCTAssertEqual(try upgraded.fetchMediaItem(id: itemID)?.title, "Arrival")
+        XCTAssertEqual(
+            try upgraded.fetchMediaFile(
+                libraryFolderID: folderID,
+                relativePath: relativePath
+            )?.id,
+            fileID
+        )
+        XCTAssertEqual(try upgraded.fetchScanRun(id: scanRunID)?.status, .completed)
+        XCTAssertEqual(try upgraded.fetchScanIssues(scanRunID: scanRunID).count, 1)
+        XCTAssertEqual(
+            try upgraded.fetchPlaybackHistory(mediaItemID: itemID, mediaFileID: fileID)?.id,
+            playback.id
         )
     }
 
@@ -131,6 +249,28 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(tableNames.contains("playback_history"))
         XCTAssertTrue(tableNames.contains("idx_playback_history_media_item_id"))
         XCTAssertEqual(try RawSQLiteFixture.migrationVersions(path: databaseURL.path), [1])
+    }
+
+    func testMigrationV3RollbackPreventsPartialMetadataSchema() throws {
+        do {
+            _ = try makeStore()
+        }
+        try removeV3SchemaObjects()
+        try RawSQLiteFixture.execute(
+            path: databaseURL.path,
+            sql: "CREATE TABLE idx_metadata_source_records_provider_id (id TEXT PRIMARY KEY)"
+        )
+
+        XCTAssertThrowsError(try makeStore()) { error in
+            guard let persistenceError = error as? PersistenceError,
+                  case .migrationFailed = persistenceError else {
+                return XCTFail("Expected migrationFailed, got \(error)")
+            }
+        }
+
+        let tableNames = Set(try RawSQLiteFixture.tableNames(path: databaseURL.path))
+        XCTAssertEqual(try RawSQLiteFixture.migrationVersions(path: databaseURL.path), [1, 2])
+        XCTAssertTrue(tableNames.isDisjoint(with: metadataTableNames))
     }
 
     func testLibraryCoreRecordsPersistAcrossStoreReopen() throws {
@@ -245,6 +385,442 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertEqual(try readOnly.fetchMediaFiles(mediaItemID: itemID).count, 1)
         XCTAssertThrowsError(
             try readOnly.saveMediaItem(MediaItem(mediaType: .movie, title: "Moon", year: 2009))
+        )
+    }
+
+    func testMetadataItemSaveFetchAndReopenStoresOverrideLocksExactly() throws {
+        let itemID: MediaItemID
+        let metadata = MetadataItem(
+            id: "metadata-item-1",
+            mediaItemID: "placeholder-item",
+            title: nil,
+            originalTitle: "Original Arrival",
+            summary: "Stored summary",
+            language: nil,
+            releaseDate: "2016-11-11",
+            titleOverrideLocked: true,
+            summaryOverrideLocked: false,
+            languageOverrideLocked: true,
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_100)
+        )
+
+        do {
+            let context = try makeMediaContext()
+            let saved = MetadataItem(
+                id: metadata.id,
+                mediaItemID: context.item.id,
+                title: metadata.title,
+                originalTitle: metadata.originalTitle,
+                summary: metadata.summary,
+                language: metadata.language,
+                releaseDate: metadata.releaseDate,
+                airDate: metadata.airDate,
+                titleOverrideLocked: metadata.titleOverrideLocked,
+                summaryOverrideLocked: metadata.summaryOverrideLocked,
+                languageOverrideLocked: metadata.languageOverrideLocked,
+                createdAt: metadata.createdAt,
+                updatedAt: metadata.updatedAt
+            )
+            try context.store.saveMetadataItem(saved)
+            XCTAssertEqual(try context.store.fetchMetadataItem(mediaItemID: context.item.id), saved)
+            itemID = context.item.id
+        }
+
+        let reopened = try makeStore()
+        let fetched = try XCTUnwrap(reopened.fetchMetadataItem(mediaItemID: itemID))
+        XCTAssertNil(fetched.title)
+        XCTAssertNil(fetched.language)
+        XCTAssertTrue(fetched.titleOverrideLocked)
+        XCTAssertFalse(fetched.summaryOverrideLocked)
+        XCTAssertTrue(fetched.languageOverrideLocked)
+    }
+
+    func testMetadataExternalIDUpsertMaintainsUniqueness() throws {
+        let context = try makeMediaContext()
+        let first = try MetadataExternalID.validated(
+            id: "external-1",
+            mediaItemID: context.item.id,
+            provider: .tmdb,
+            externalIDType: .tmdbMovie,
+            externalIDValue: "550",
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let replacement = try MetadataExternalID.validated(
+            id: "external-2",
+            mediaItemID: context.item.id,
+            provider: .tmdb,
+            externalIDType: .tmdbMovie,
+            externalIDValue: "551",
+            createdAt: Date(timeIntervalSince1970: 2_000),
+            updatedAt: Date(timeIntervalSince1970: 2_000)
+        )
+
+        try context.store.upsertMetadataExternalIDs([first])
+        try context.store.upsertMetadataExternalIDs([replacement])
+
+        let fetched = try context.store.fetchMetadataExternalIDs(mediaItemID: context.item.id)
+        XCTAssertEqual(fetched.count, 1)
+        XCTAssertEqual(fetched[0].externalIDValue, "551")
+        XCTAssertEqual(
+            try RawSQLiteFixture.singleInt(
+                path: databaseURL.path,
+                sql: "SELECT COUNT(*) FROM metadata_external_ids"
+            ),
+            1
+        )
+    }
+
+    func testMetadataSourceRecordSaveFetchManualLockAndOpaquePayloadPersistence() throws {
+        let context = try makeMediaContext()
+        let otherItem = MediaItem(mediaType: .movie, title: "Moon", year: 2009)
+        try context.store.saveMediaItem(otherItem)
+
+        let record = try MetadataSourceRecord.validated(
+            id: "source-1",
+            mediaItemID: context.item.id,
+            provider: .tmdb,
+            providerID: "movie:550",
+            providerMediaType: .movie,
+            confidence: 1.0,
+            matchSource: .manual,
+            manualMatchLocked: true,
+            rawPayloadJSON: "not-json-but-opaque",
+            matchedAt: Date(timeIntervalSince1970: 1_000),
+            refreshedAt: Date(timeIntervalSince1970: 1_100),
+            createdAt: Date(timeIntervalSince1970: 900),
+            updatedAt: Date(timeIntervalSince1970: 1_100)
+        )
+        let nullPayloadRecord = try MetadataSourceRecord.validated(
+            id: "source-2",
+            mediaItemID: otherItem.id,
+            provider: .tmdb,
+            providerID: "movie:551",
+            providerMediaType: .movie,
+            confidence: 0.5,
+            matchSource: .automatic,
+            rawPayloadJSON: nil
+        )
+
+        try context.store.saveMetadataSourceRecord(record)
+        try context.store.saveMetadataSourceRecord(nullPayloadRecord)
+
+        let fetched = try XCTUnwrap(
+            context.store.fetchMetadataSourceRecord(mediaItemID: context.item.id, provider: .tmdb)
+        )
+        XCTAssertEqual(fetched, record)
+        XCTAssertTrue(fetched.manualMatchLocked)
+        XCTAssertEqual(fetched.rawPayloadJSON, "not-json-but-opaque")
+        XCTAssertNil(
+            try context.store
+                .fetchMetadataSourceRecord(mediaItemID: otherItem.id, provider: .tmdb)?
+                .rawPayloadJSON
+        )
+    }
+
+    func testPosterAssetSaveFetchAndReopen() throws {
+        let itemID: MediaItemID
+        let asset: PosterAsset
+
+        do {
+            let context = try makeMediaContext()
+            asset = try PosterAsset.validated(
+                id: "poster-1",
+                mediaItemID: context.item.id,
+                assetType: .poster,
+                source: .tmdb,
+                remotePath: "/poster.jpg",
+                width: 500,
+                height: 750,
+                preferredCacheSize: "w500",
+                localCachePath: "posters/poster-1.jpg",
+                cachedAt: Date(timeIntervalSince1970: 1_200),
+                isSelected: false,
+                selectionSource: .automatic,
+                createdAt: Date(timeIntervalSince1970: 1_000),
+                updatedAt: Date(timeIntervalSince1970: 1_100)
+            )
+            try context.store.savePosterAsset(asset)
+            XCTAssertEqual(try context.store.fetchPosterAssets(mediaItemID: context.item.id), [asset])
+            itemID = context.item.id
+        }
+
+        let reopened = try makeStore()
+        XCTAssertEqual(try reopened.fetchPosterAssets(mediaItemID: itemID), [asset])
+    }
+
+    func testSelectedPosterPartialUniqueInvariant() throws {
+        let context = try makeMediaContext()
+
+        XCTAssertThrowsError(
+            try RawSQLiteFixture.execute(
+                path: databaseURL.path,
+                sql: """
+                    INSERT INTO poster_assets (
+                        id, media_item_id, asset_type, source, remote_path,
+                        width, height, preferred_cache_size, is_selected,
+                        selection_source, created_at, updated_at
+                    )
+                    VALUES (
+                        'poster-selected-1', '\(context.item.id)', 'poster', 'tmdb', '/one.jpg',
+                        500, 750, 'w500', 1, 'automatic', 1.0, 1.0
+                    );
+                    INSERT INTO poster_assets (
+                        id, media_item_id, asset_type, source, remote_path,
+                        width, height, preferred_cache_size, is_selected,
+                        selection_source, created_at, updated_at
+                    )
+                    VALUES (
+                        'poster-selected-2', '\(context.item.id)', 'poster', 'tmdb', '/two.jpg',
+                        500, 750, 'w500', 1, 'automatic', 1.0, 1.0
+                    );
+                    """
+            )
+        )
+        XCTAssertEqual(
+            try RawSQLiteFixture.singleInt(
+                path: databaseURL.path,
+                sql: "SELECT COUNT(*) FROM poster_assets WHERE is_selected = 1"
+            ),
+            1
+        )
+    }
+
+    func testSavePosterAssetSelectedUnselectsExistingPosterForSameMediaItemAndType() throws {
+        let context = try makeMediaContext()
+        let first = try PosterAsset.validated(
+            id: "poster-1",
+            mediaItemID: context.item.id,
+            assetType: .poster,
+            source: .tmdb,
+            remotePath: "/one.jpg",
+            preferredCacheSize: "w500",
+            isSelected: true,
+            selectionSource: .automatic,
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let second = try PosterAsset.validated(
+            id: "poster-2",
+            mediaItemID: context.item.id,
+            assetType: .poster,
+            source: .tmdb,
+            remotePath: "/two.jpg",
+            preferredCacheSize: "w500",
+            isSelected: true,
+            selectionSource: .manual,
+            updatedAt: Date(timeIntervalSince1970: 2_000)
+        )
+
+        try context.store.savePosterAsset(first)
+        try context.store.savePosterAsset(second)
+
+        let assets = try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+        XCTAssertFalse(try XCTUnwrap(assets.first { $0.id == first.id }).isSelected)
+        let selected = try XCTUnwrap(assets.first { $0.id == second.id })
+        XCTAssertTrue(selected.isSelected)
+        XCTAssertEqual(selected.selectionSource, .manual)
+    }
+
+    func testSelectPosterAssetUnselectsPriorSelectedPosterForSameMediaItemAndType() throws {
+        let context = try makeMediaContext()
+        let first = try PosterAsset.validated(
+            id: "poster-1",
+            mediaItemID: context.item.id,
+            assetType: .poster,
+            source: .tmdb,
+            remotePath: "/one.jpg",
+            preferredCacheSize: "w500",
+            isSelected: true
+        )
+        let second = try PosterAsset.validated(
+            id: "poster-2",
+            mediaItemID: context.item.id,
+            assetType: .poster,
+            source: .tmdb,
+            remotePath: "/two.jpg",
+            preferredCacheSize: "w500",
+            isSelected: false
+        )
+
+        try context.store.savePosterAsset(first)
+        try context.store.savePosterAsset(second)
+        try context.store.selectPosterAsset(
+            id: second.id,
+            mediaItemID: context.item.id,
+            selectionSource: .manual
+        )
+
+        let assets = try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+        XCTAssertFalse(try XCTUnwrap(assets.first { $0.id == first.id }).isSelected)
+        let selected = try XCTUnwrap(assets.first { $0.id == second.id })
+        XCTAssertTrue(selected.isSelected)
+        XCTAssertEqual(selected.selectionSource, .manual)
+    }
+
+    func testMetadataRepositoryMethodsDoNotAffectPlaybackHistory() throws {
+        let context = try makePlaybackContext()
+        let playedAt = Date(timeIntervalSince1970: 1_000)
+        let history = PlaybackHistory(
+            id: "history-metadata-isolation",
+            mediaItemID: context.item.id,
+            mediaFileID: context.file.id,
+            positionMS: 12_000,
+            durationMS: 120_000,
+            completed: false,
+            playCount: 1,
+            lastPlayedAt: playedAt,
+            createdAt: playedAt,
+            updatedAt: playedAt
+        )
+        try context.store.savePlaybackHistory(history)
+
+        try context.store.saveMetadataItem(
+            MetadataItem(mediaItemID: context.item.id, title: "Arrival")
+        )
+        try context.store.upsertMetadataExternalIDs([
+            try MetadataExternalID.validated(
+                mediaItemID: context.item.id,
+                provider: .tmdb,
+                externalIDType: .tmdbMovie,
+                externalIDValue: "550"
+            )
+        ])
+        try context.store.saveMetadataSourceRecord(
+            try MetadataSourceRecord.validated(
+                mediaItemID: context.item.id,
+                provider: .tmdb,
+                providerID: "movie:550",
+                providerMediaType: .movie,
+                confidence: 1.0,
+                matchSource: .manual,
+                manualMatchLocked: true
+            )
+        )
+        try context.store.savePosterAsset(
+            try PosterAsset.validated(
+                mediaItemID: context.item.id,
+                assetType: .poster,
+                source: .tmdb,
+                remotePath: "/poster.jpg",
+                preferredCacheSize: "w500",
+                isSelected: true
+            )
+        )
+
+        XCTAssertEqual(
+            try context.store.fetchPlaybackHistory(
+                mediaItemID: context.item.id,
+                mediaFileID: context.file.id
+            ),
+            history
+        )
+    }
+
+    func testReadOnlyStoreCanReadV3MetadataRecordsButCannotWrite() throws {
+        let itemID: MediaItemID
+        let metadata: MetadataItem
+
+        do {
+            let context = try makeMediaContext()
+            metadata = MetadataItem(
+                id: "metadata-readonly",
+                mediaItemID: context.item.id,
+                title: "Arrival",
+                titleOverrideLocked: true,
+                createdAt: Date(timeIntervalSince1970: 1_000),
+                updatedAt: Date(timeIntervalSince1970: 1_000)
+            )
+            try context.store.saveMetadataItem(metadata)
+            itemID = context.item.id
+        }
+
+        let readOnly = try CineMindStore(readOnlyPath: databaseURL.path)
+        XCTAssertEqual(try readOnly.fetchMetadataItem(mediaItemID: itemID), metadata)
+        XCTAssertThrowsError(
+            try readOnly.saveMetadataItem(
+                MetadataItem(mediaItemID: itemID, title: "Moon")
+            )
+        )
+    }
+
+    func testMetadataListingMethodsReturnMissingAndStaleItems() throws {
+        let store = try makeStore()
+        let enriched = MediaItem(
+            mediaType: .movie,
+            title: "Arrival",
+            year: 2016,
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let missing = MediaItem(
+            mediaType: .movie,
+            title: "Moon",
+            year: 2009,
+            createdAt: Date(timeIntervalSince1970: 2_000),
+            updatedAt: Date(timeIntervalSince1970: 2_000)
+        )
+        let fresh = MediaItem(
+            mediaType: .movie,
+            title: "Primer",
+            year: 2004,
+            createdAt: Date(timeIntervalSince1970: 3_000),
+            updatedAt: Date(timeIntervalSince1970: 3_000)
+        )
+        try store.saveMediaItem(enriched)
+        try store.saveMediaItem(missing)
+        try store.saveMediaItem(fresh)
+        try store.saveMetadataItem(MetadataItem(mediaItemID: enriched.id, title: "Arrival"))
+        try store.saveMetadataItem(MetadataItem(mediaItemID: fresh.id, title: "Primer"))
+        try store.saveMetadataSourceRecord(
+            try MetadataSourceRecord.validated(
+                mediaItemID: enriched.id,
+                provider: .tmdb,
+                providerID: "movie:1",
+                providerMediaType: .movie,
+                confidence: 1.0,
+                matchSource: .automatic,
+                refreshedAt: Date(timeIntervalSince1970: 1_500)
+            )
+        )
+        try store.saveMetadataSourceRecord(
+            try MetadataSourceRecord.validated(
+                mediaItemID: missing.id,
+                provider: .tmdb,
+                providerID: "movie:2",
+                providerMediaType: .movie,
+                confidence: 1.0,
+                matchSource: .automatic,
+                refreshedAt: nil
+            )
+        )
+        try store.saveMetadataSourceRecord(
+            try MetadataSourceRecord.validated(
+                mediaItemID: fresh.id,
+                provider: .tmdb,
+                providerID: "movie:3",
+                providerMediaType: .movie,
+                confidence: 1.0,
+                matchSource: .automatic,
+                refreshedAt: Date(timeIntervalSince1970: 3_500)
+            )
+        )
+
+        XCTAssertEqual(try store.fetchMediaItemsMissingMetadata(limit: 10).map(\.id), [missing.id])
+        XCTAssertEqual(try store.fetchMediaItemsMissingMetadata(limit: 0), [])
+        XCTAssertEqual(
+            try store.fetchMediaItemsWithStaleMetadata(
+                olderThan: Date(timeIntervalSince1970: 2_000),
+                limit: 10
+            ).map(\.id),
+            [enriched.id, missing.id]
+        )
+        XCTAssertEqual(
+            try store.fetchMediaItemsWithStaleMetadata(
+                olderThan: Date(timeIntervalSince1970: 2_000),
+                limit: 0
+            ),
+            []
         )
     }
 
@@ -829,6 +1405,7 @@ final class PersistenceRepositoryTests: XCTestCase {
     }
 
     private func removeV2SchemaObjects() throws {
+        try removeV3SchemaObjects()
         try RawSQLiteFixture.execute(
             path: databaseURL.path,
             sql: """
@@ -837,6 +1414,28 @@ final class PersistenceRepositoryTests: XCTestCase {
                 DROP INDEX IF EXISTS idx_playback_history_media_item_id;
                 DROP TABLE IF EXISTS playback_history;
                 DELETE FROM schema_migrations WHERE version = 2;
+                """
+        )
+    }
+
+    private func removeV3SchemaObjects() throws {
+        try RawSQLiteFixture.execute(
+            path: databaseURL.path,
+            sql: """
+                DROP INDEX IF EXISTS idx_poster_assets_selected_unique;
+                DROP INDEX IF EXISTS idx_poster_assets_remote_path;
+                DROP INDEX IF EXISTS idx_poster_assets_media_item_id;
+                DROP INDEX IF EXISTS idx_metadata_source_records_refreshed_at;
+                DROP INDEX IF EXISTS idx_metadata_source_records_provider_id;
+                DROP INDEX IF EXISTS idx_metadata_source_records_media_item_id;
+                DROP INDEX IF EXISTS idx_metadata_external_ids_lookup;
+                DROP INDEX IF EXISTS idx_metadata_external_ids_media_item_id;
+                DROP INDEX IF EXISTS idx_metadata_items_media_item_id;
+                DROP TABLE IF EXISTS poster_assets;
+                DROP TABLE IF EXISTS metadata_source_records;
+                DROP TABLE IF EXISTS metadata_external_ids;
+                DROP TABLE IF EXISTS metadata_items;
+                DELETE FROM schema_migrations WHERE version = 3;
                 """
         )
     }
@@ -885,6 +1484,13 @@ private struct PlaybackContext {
 private enum RollbackProbeError: Error {
     case intentional
 }
+
+private let metadataTableNames: Set<String> = [
+    "metadata_items",
+    "metadata_external_ids",
+    "metadata_source_records",
+    "poster_assets"
+]
 
 private enum SQLiteFixtureError: Error {
     case openFailed(String)
