@@ -9,6 +9,10 @@ public typealias MediaFileID = String
 public typealias ScanRunID = String
 public typealias ScanIssueID = String
 public typealias PlaybackHistoryID = String
+public typealias MetadataItemID = String
+public typealias MetadataExternalIDID = String
+public typealias MetadataSourceRecordID = String
+public typealias PosterAssetID = String
 
 public enum DomainID {
     public static func new() -> String {
@@ -77,6 +81,40 @@ public enum ScanIssueType: String, Codable, Sendable, Equatable, CaseIterable {
     case filesystemError
 }
 
+public enum MetadataProviderName: String, Codable, Sendable, Equatable, CaseIterable {
+    case tmdb
+}
+
+public enum MetadataProviderMediaType: String, Codable, Sendable, Equatable, CaseIterable {
+    case movie
+    case episode
+}
+
+public enum MetadataMatchSource: String, Codable, Sendable, Equatable, CaseIterable {
+    case automatic
+    case manual
+}
+
+public enum MetadataExternalIDType: String, Codable, Sendable, Equatable, CaseIterable {
+    case tmdbMovie = "tmdb_movie"
+    case tmdbTVSeries = "tmdb_tv_series"
+    case tmdbEpisode = "tmdb_episode"
+    case imdb
+}
+
+public enum PosterAssetType: String, Codable, Sendable, Equatable, CaseIterable {
+    case poster
+}
+
+public enum PosterAssetSource: String, Codable, Sendable, Equatable, CaseIterable {
+    case tmdb
+}
+
+public enum PosterSelectionSource: String, Codable, Sendable, Equatable, CaseIterable {
+    case automatic
+    case manual
+}
+
 public enum DomainValidationError: Error, Sendable, Equatable {
     case emptySeriesTitle
     case invalidSeasonNumber(Int)
@@ -84,6 +122,13 @@ public enum DomainValidationError: Error, Sendable, Equatable {
     case invalidPlaybackPositionMS(Int)
     case invalidPlaybackDurationMS(Int)
     case invalidPlaybackPlayCount(Int)
+    case emptyMetadataExternalIDValue
+    case emptyMetadataSourceProviderID
+    case invalidMetadataSourceConfidence(Double)
+    case emptyPosterRemotePath
+    case emptyPosterPreferredCacheSize
+    case invalidPosterWidth(Int)
+    case invalidPosterHeight(Int)
 }
 
 public struct Library: Codable, Sendable, Equatable {
@@ -430,6 +475,338 @@ public struct PlaybackHistory: Codable, Sendable, Equatable {
         }
         guard playCount >= 0 else {
             throw DomainValidationError.invalidPlaybackPlayCount(playCount)
+        }
+    }
+}
+
+public struct MetadataItem: Codable, Sendable, Equatable {
+    public var id: MetadataItemID
+    public var mediaItemID: MediaItemID
+    public var title: String?
+    public var originalTitle: String?
+    public var summary: String?
+    public var language: String?
+    public var releaseDate: String?
+    public var airDate: String?
+    public var titleOverrideLocked: Bool
+    public var summaryOverrideLocked: Bool
+    public var languageOverrideLocked: Bool
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: MetadataItemID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        title: String? = nil,
+        originalTitle: String? = nil,
+        summary: String? = nil,
+        language: String? = nil,
+        releaseDate: String? = nil,
+        airDate: String? = nil,
+        titleOverrideLocked: Bool = false,
+        summaryOverrideLocked: Bool = false,
+        languageOverrideLocked: Bool = false,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.mediaItemID = mediaItemID
+        self.title = title
+        self.originalTitle = originalTitle
+        self.summary = summary
+        self.language = language
+        self.releaseDate = releaseDate
+        self.airDate = airDate
+        self.titleOverrideLocked = titleOverrideLocked
+        self.summaryOverrideLocked = summaryOverrideLocked
+        self.languageOverrideLocked = languageOverrideLocked
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct MetadataExternalID: Codable, Sendable, Equatable {
+    public var id: MetadataExternalIDID
+    public var mediaItemID: MediaItemID
+    public var provider: MetadataProviderName
+    public var externalIDType: MetadataExternalIDType
+    public var externalIDValue: String
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: MetadataExternalIDID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        provider: MetadataProviderName,
+        externalIDType: MetadataExternalIDType,
+        externalIDValue: String,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        precondition(!externalIDValue.isEmpty, "externalIDValue must not be empty")
+
+        self.id = id
+        self.mediaItemID = mediaItemID
+        self.provider = provider
+        self.externalIDType = externalIDType
+        self.externalIDValue = externalIDValue
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public static func validated(
+        id: MetadataExternalIDID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        provider: MetadataProviderName,
+        externalIDType: MetadataExternalIDType,
+        externalIDValue: String,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) throws -> MetadataExternalID {
+        try validate(externalIDValue: externalIDValue)
+        return MetadataExternalID(
+            id: id,
+            mediaItemID: mediaItemID,
+            provider: provider,
+            externalIDType: externalIDType,
+            externalIDValue: externalIDValue,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    public func validate() throws {
+        try Self.validate(externalIDValue: externalIDValue)
+    }
+
+    public static func validate(externalIDValue: String) throws {
+        guard !externalIDValue.isEmpty else {
+            throw DomainValidationError.emptyMetadataExternalIDValue
+        }
+    }
+}
+
+public struct MetadataSourceRecord: Codable, Sendable, Equatable {
+    public var id: MetadataSourceRecordID
+    public var mediaItemID: MediaItemID
+    public var provider: MetadataProviderName
+    public var providerID: String
+    public var providerMediaType: MetadataProviderMediaType
+    public var confidence: Double
+    public var matchSource: MetadataMatchSource
+    public var manualMatchLocked: Bool
+    public var rawPayloadJSON: String?
+    public var matchedAt: Date
+    public var refreshedAt: Date?
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: MetadataSourceRecordID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        provider: MetadataProviderName,
+        providerID: String,
+        providerMediaType: MetadataProviderMediaType,
+        confidence: Double,
+        matchSource: MetadataMatchSource,
+        manualMatchLocked: Bool = false,
+        rawPayloadJSON: String? = nil,
+        matchedAt: Date = Date(),
+        refreshedAt: Date? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        precondition(!providerID.isEmpty, "providerID must not be empty")
+        precondition(
+            confidence >= 0.0 && confidence <= 1.0,
+            "confidence must be between 0.0 and 1.0"
+        )
+
+        self.id = id
+        self.mediaItemID = mediaItemID
+        self.provider = provider
+        self.providerID = providerID
+        self.providerMediaType = providerMediaType
+        self.confidence = confidence
+        self.matchSource = matchSource
+        self.manualMatchLocked = manualMatchLocked
+        self.rawPayloadJSON = rawPayloadJSON
+        self.matchedAt = matchedAt
+        self.refreshedAt = refreshedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public static func validated(
+        id: MetadataSourceRecordID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        provider: MetadataProviderName,
+        providerID: String,
+        providerMediaType: MetadataProviderMediaType,
+        confidence: Double,
+        matchSource: MetadataMatchSource,
+        manualMatchLocked: Bool = false,
+        rawPayloadJSON: String? = nil,
+        matchedAt: Date = Date(),
+        refreshedAt: Date? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) throws -> MetadataSourceRecord {
+        try validate(providerID: providerID, confidence: confidence)
+        return MetadataSourceRecord(
+            id: id,
+            mediaItemID: mediaItemID,
+            provider: provider,
+            providerID: providerID,
+            providerMediaType: providerMediaType,
+            confidence: confidence,
+            matchSource: matchSource,
+            manualMatchLocked: manualMatchLocked,
+            rawPayloadJSON: rawPayloadJSON,
+            matchedAt: matchedAt,
+            refreshedAt: refreshedAt,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    public func validate() throws {
+        try Self.validate(providerID: providerID, confidence: confidence)
+    }
+
+    public static func validate(providerID: String, confidence: Double) throws {
+        guard !providerID.isEmpty else {
+            throw DomainValidationError.emptyMetadataSourceProviderID
+        }
+        guard confidence >= 0.0 && confidence <= 1.0 else {
+            throw DomainValidationError.invalidMetadataSourceConfidence(confidence)
+        }
+    }
+}
+
+public struct PosterAsset: Codable, Sendable, Equatable {
+    public var id: PosterAssetID
+    public var mediaItemID: MediaItemID
+    public var assetType: PosterAssetType
+    public var source: PosterAssetSource
+    public var remotePath: String
+    public var width: Int?
+    public var height: Int?
+    public var preferredCacheSize: String
+    public var localCachePath: String?
+    public var cachedAt: Date?
+    public var isSelected: Bool
+    public var selectionSource: PosterSelectionSource
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: PosterAssetID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        assetType: PosterAssetType,
+        source: PosterAssetSource,
+        remotePath: String,
+        width: Int? = nil,
+        height: Int? = nil,
+        preferredCacheSize: String,
+        localCachePath: String? = nil,
+        cachedAt: Date? = nil,
+        isSelected: Bool = false,
+        selectionSource: PosterSelectionSource = .automatic,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        precondition(!remotePath.isEmpty, "remotePath must not be empty")
+        precondition(!preferredCacheSize.isEmpty, "preferredCacheSize must not be empty")
+        if let width {
+            precondition(width > 0, "width must be greater than zero when known")
+        }
+        if let height {
+            precondition(height > 0, "height must be greater than zero when known")
+        }
+
+        self.id = id
+        self.mediaItemID = mediaItemID
+        self.assetType = assetType
+        self.source = source
+        self.remotePath = remotePath
+        self.width = width
+        self.height = height
+        self.preferredCacheSize = preferredCacheSize
+        self.localCachePath = localCachePath
+        self.cachedAt = cachedAt
+        self.isSelected = isSelected
+        self.selectionSource = selectionSource
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public static func validated(
+        id: PosterAssetID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        assetType: PosterAssetType,
+        source: PosterAssetSource,
+        remotePath: String,
+        width: Int? = nil,
+        height: Int? = nil,
+        preferredCacheSize: String,
+        localCachePath: String? = nil,
+        cachedAt: Date? = nil,
+        isSelected: Bool = false,
+        selectionSource: PosterSelectionSource = .automatic,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) throws -> PosterAsset {
+        try validate(
+            remotePath: remotePath,
+            width: width,
+            height: height,
+            preferredCacheSize: preferredCacheSize
+        )
+        return PosterAsset(
+            id: id,
+            mediaItemID: mediaItemID,
+            assetType: assetType,
+            source: source,
+            remotePath: remotePath,
+            width: width,
+            height: height,
+            preferredCacheSize: preferredCacheSize,
+            localCachePath: localCachePath,
+            cachedAt: cachedAt,
+            isSelected: isSelected,
+            selectionSource: selectionSource,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    public func validate() throws {
+        try Self.validate(
+            remotePath: remotePath,
+            width: width,
+            height: height,
+            preferredCacheSize: preferredCacheSize
+        )
+    }
+
+    public static func validate(
+        remotePath: String,
+        width: Int?,
+        height: Int?,
+        preferredCacheSize: String
+    ) throws {
+        guard !remotePath.isEmpty else {
+            throw DomainValidationError.emptyPosterRemotePath
+        }
+        guard !preferredCacheSize.isEmpty else {
+            throw DomainValidationError.emptyPosterPreferredCacheSize
+        }
+        if let width, width <= 0 {
+            throw DomainValidationError.invalidPosterWidth(width)
+        }
+        if let height, height <= 0 {
+            throw DomainValidationError.invalidPosterHeight(height)
         }
     }
 }
