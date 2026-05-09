@@ -15,9 +15,11 @@ let package = Package(
         .library(name: "Application", targets: ["Application"]),
         .library(name: "Playback", targets: ["Playback"]),
         .library(name: "LibMPVPlayback", targets: ["LibMPVPlayback"]),
+        .library(name: "Metadata", targets: ["Metadata"]),
         .executable(name: "CineMindShell", targets: ["CineMindShell"]),
         .executable(name: "CineMindPlaybackShell", targets: ["CineMindPlaybackShell"]),
-        .executable(name: "CineMindPlaybackSurfaceSpike", targets: ["CineMindPlaybackSurfaceSpike"])
+        .executable(name: "CineMindPlaybackSurfaceSpike", targets: ["CineMindPlaybackSurfaceSpike"]),
+        .executable(name: "CineMindMetadataShell", targets: ["CineMindMetadataShell"])
     ],
     targets: [
         .target(name: "Shared"),
@@ -41,8 +43,12 @@ let package = Package(
             dependencies: ["Domain", "Shared"]
         ),
         .target(
+            name: "Metadata",
+            dependencies: ["Domain", "Shared"]
+        ),
+        .target(
             name: "Application",
-            dependencies: ["Domain", "Persistence", "Playback", "Shared"]
+            dependencies: ["Domain", "Persistence", "Playback", "Metadata", "Shared"]
         ),
         .systemLibrary(
             name: "CLibMPV",
@@ -67,6 +73,10 @@ let package = Package(
             name: "CineMindPlaybackSurfaceSpike",
             dependencies: ["Playback", "LibMPVPlayback"]
         ),
+        .executableTarget(
+            name: "CineMindMetadataShell",
+            dependencies: ["Application", "Persistence", "Metadata", "Shared"]
+        ),
         .testTarget(
             name: "DomainTests",
             dependencies: ["Domain"]
@@ -86,6 +96,10 @@ let package = Package(
         .testTarget(
             name: "PlaybackTests",
             dependencies: ["Playback"]
+        ),
+        .testTarget(
+            name: "MetadataTests",
+            dependencies: ["Metadata", "Domain"]
         )
     ]
 )
