@@ -494,34 +494,21 @@ public struct TMDBMetadataProvider: MetadataProvider {
 
         let data = try await send(path: "/3/search/movie", queryItems: queryItems)
         let response = try decode(TMDBMovieSearchResponse.self, from: data)
-        return response.results.compactMap { result in
+        let candidates: [MetadataCandidate] = response.results.compactMap { result in
             guard let identifier = MetadataProviderIdentifier.movie(id: result.id) else {
                 return nil
             }
             let year = year(from: result.releaseDate)
-            let confidence = movieConfidence(
-                queryTitle: query.title,
-                queryYear: query.year,
-                resultTitle: result.title,
-                originalTitle: result.originalTitle,
-                resultYear: year
-            )
             return MetadataCandidate(
                 identifier: identifier,
                 displayTitle: result.title ?? result.originalTitle ?? "Untitled Movie",
                 originalTitle: result.originalTitle,
                 year: year,
                 overviewPreview: overviewPreview(result.overview),
-                confidence: confidence,
-                confidenceInputs: [
-                    "media_type": "movie",
-                    "title": "\(titleSimilarity(query.title, result.title ?? ""))",
-                    "original_title": "\(titleSimilarity(query.title, result.originalTitle ?? ""))",
-                    "year": "\(yearScore(queryYear: query.year, resultYear: year))"
-                ]
+                confidence: 0.0
             )
         }
-        .sorted { $0.confidence > $1.confidence }
+        return MetadataCandidateRankingPolicy().rankMovieCandidates(for: query, candidates: candidates)
     }
 
     private func searchEpisodes(query: MetadataSearchQuery) async throws -> [MetadataCandidate] {
@@ -562,11 +549,6 @@ public struct TMDBMetadataProvider: MetadataProvider {
             }
 
             let year = year(from: series.firstAirDate)
-            let seriesScore = max(
-                titleSimilarity(seriesTitle, series.name ?? ""),
-                titleSimilarity(seriesTitle, series.originalName ?? "")
-            )
-            let confidence = min(0.96, seriesScore * 0.80 + 0.20)
             candidates.append(
                 MetadataCandidate(
                     identifier: identifier,
@@ -575,17 +557,12 @@ public struct TMDBMetadataProvider: MetadataProvider {
                     year: year,
                     airDate: episodeDetails.airDate,
                     overviewPreview: overviewPreview(episodeDetails.overview ?? series.overview),
-                    confidence: confidence,
-                    confidenceInputs: [
-                        "media_type": "episode",
-                        "series_title": "\(seriesScore)",
-                        "episode_exists": "true"
-                    ]
+                    confidence: 0.0
                 )
             )
         }
 
-        return candidates.sorted { $0.confidence > $1.confidence }
+        return MetadataCandidateRankingPolicy().rankEpisodeCandidates(for: query, candidates: candidates)
     }
 
     private func defaultSearchQueryItems(query: String, language: String?) -> [URLQueryItem] {
@@ -919,57 +896,6 @@ private struct CompactEpisodePayload: Encodable {
         case airDate = "air_date"
         case imdbID = "imdb_id"
     }
-}
-
-private func movieConfidence(
-    queryTitle: String,
-    queryYear: Int?,
-    resultTitle: String?,
-    originalTitle: String?,
-    resultYear: Int?
-) -> Double {
-    let titleScore = max(
-        titleSimilarity(queryTitle, resultTitle ?? ""),
-        titleSimilarity(queryTitle, originalTitle ?? "")
-    )
-    return min(0.98, titleScore * 0.78 + yearScore(queryYear: queryYear, resultYear: resultYear) * 0.22)
-}
-
-private func titleSimilarity(_ lhs: String, _ rhs: String) -> Double {
-    let left = MediaTitleNormalizer.normalize(lhs)
-    let right = MediaTitleNormalizer.normalize(rhs)
-    guard !left.isEmpty, !right.isEmpty else {
-        return 0.0
-    }
-    guard left != right else {
-        return 1.0
-    }
-
-    let leftTokens = Set(left.split(separator: " ").map(String.init))
-    let rightTokens = Set(right.split(separator: " ").map(String.init))
-    let overlap = leftTokens.intersection(rightTokens).count
-    let denominator = max(leftTokens.count, rightTokens.count)
-    guard denominator > 0 else {
-        return 0.0
-    }
-
-    let containsBonus = left.contains(right) || right.contains(left) ? 0.15 : 0.0
-    return min(1.0, Double(overlap) / Double(denominator) + containsBonus)
-}
-
-private func yearScore(queryYear: Int?, resultYear: Int?) -> Double {
-    guard let queryYear, let resultYear else {
-        return 0.5
-    }
-
-    let difference = abs(queryYear - resultYear)
-    if difference == 0 {
-        return 1.0
-    }
-    if difference == 1 {
-        return 0.7
-    }
-    return 0.0
 }
 
 private func year(from date: String?) -> Int? {
