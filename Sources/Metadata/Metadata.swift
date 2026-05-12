@@ -471,19 +471,11 @@ public struct TMDBMetadataProvider: MetadataProvider {
         using imageConfiguration: TMDBImageConfiguration,
         size requestedSize: String? = nil
     ) -> URL? {
-        guard !image.remotePath.isEmpty else {
-            return nil
-        }
-
-        let size = requestedSize
-            ?? preferredImageSize(for: image, availableSizes: imageConfiguration.posterSizes)
-        let trimmedPath = image.remotePath.hasPrefix("/")
-            ? String(image.remotePath.dropFirst())
-            : image.remotePath
-
-        return imageConfiguration.secureBaseURL
-            .appendingPathComponent(size)
-            .appendingPathComponent(trimmedPath)
+        TMDBImageURLResolver.imageURL(
+            for: image,
+            using: imageConfiguration,
+            size: requestedSize
+        )
     }
 
     private func searchMovies(query: MetadataSearchQuery) async throws -> [MetadataCandidate] {
@@ -719,15 +711,6 @@ public struct TMDBMetadataProvider: MetadataProvider {
         )
     }
 
-    private func preferredImageSize(for image: RemoteImage, availableSizes: [String]) -> String {
-        if availableSizes.contains(image.preferredCacheSize) {
-            return image.preferredCacheSize
-        }
-        if availableSizes.contains("original") {
-            return "original"
-        }
-        return availableSizes.last ?? image.preferredCacheSize
-    }
 }
 
 private struct TMDBMovieSearchResponse: Decodable {
