@@ -7,6 +7,11 @@ public enum ApplicationMetadataError: Error, Sendable, Equatable {
     case mediaItemNotFound(MediaItemID)
     case missingEpisodeInfo(MediaItemID)
     case invalidProviderID(String)
+    case providerMismatch(
+        mediaItemID: MediaItemID,
+        expected: MetadataProviderName,
+        actual: MetadataProviderName
+    )
     case providerMediaTypeMismatch(mediaItemID: MediaItemID, providerID: String)
     case episodeProviderIDMismatch(
         mediaItemID: MediaItemID,
@@ -22,6 +27,11 @@ public enum AutoMatchMetadataResult: Equatable, Sendable {
     case noCandidates
     case lowConfidence
     case ambiguous
+}
+
+public enum RefreshMetadataResult: Equatable, Sendable {
+    case autoMatched(AutoMatchMetadataResult)
+    case refreshed(MetadataSourceRecord)
 }
 
 public protocol ApplicationMetadataStore {
@@ -140,6 +150,78 @@ public struct AutoMatchMetadataUseCase {
         case .ambiguous:
             return .ambiguous
         }
+    }
+
+    private func fetchMediaItem(_ mediaItemID: MediaItemID) throws -> MediaItem {
+        guard let mediaItem = try store.fetchMediaItem(id: mediaItemID) else {
+            throw ApplicationMetadataError.mediaItemNotFound(mediaItemID)
+        }
+        return mediaItem
+    }
+}
+
+public struct RefreshMetadataUseCase {
+    private let store: any ApplicationMetadataStore
+    private let provider: any MetadataProvider
+    private let policy: MetadataAutoMatchPolicy
+    private let now: () -> Date
+
+    public init(
+        store: any ApplicationMetadataStore,
+        provider: any MetadataProvider,
+        policy: MetadataAutoMatchPolicy = MetadataAutoMatchPolicy(),
+        now: @escaping () -> Date = { Date() }
+    ) {
+        self.store = store
+        self.provider = provider
+        self.policy = policy
+        self.now = now
+    }
+
+    public func refresh(
+        mediaItemID: MediaItemID,
+        language: String? = nil
+    ) async throws -> RefreshMetadataResult {
+        let mediaItem = try fetchMediaItem(mediaItemID)
+        guard let source = try store.fetchMetadataSourceRecord(
+            mediaItemID: mediaItem.id,
+            provider: provider.providerName
+        ) else {
+            let result = try await AutoMatchMetadataUseCase(
+                store: store,
+                provider: provider,
+                policy: policy,
+                now: now
+            ).match(mediaItemID: mediaItem.id, language: language)
+            return .autoMatched(result)
+        }
+
+        guard source.provider == provider.providerName else {
+            throw ApplicationMetadataError.providerMismatch(
+                mediaItemID: mediaItem.id,
+                expected: provider.providerName,
+                actual: source.provider
+            )
+        }
+        guard let identifier = MetadataProviderIdentifier(rawValue: source.providerID) else {
+            throw ApplicationMetadataError.invalidProviderID(source.providerID)
+        }
+        try MetadataApplicationMapper.validate(identifier, matches: mediaItem)
+
+        let details = try await provider.fetchDetails(identifier: identifier)
+        let images = try await provider.fetchImages(identifier: identifier)
+
+        let refreshedSource = try MetadataMatchWriter(
+            store: store,
+            providerName: provider.providerName,
+            now: now
+        ).refresh(
+            mediaItem: mediaItem,
+            source: source,
+            details: details,
+            images: images
+        )
+        return .refreshed(refreshedSource)
     }
 
     private func fetchMediaItem(_ mediaItemID: MediaItemID) throws -> MediaItem {
@@ -279,6 +361,45 @@ private struct MetadataMatchWriter {
         matchSource: MetadataMatchSource,
         manualMatchLocked: Bool
     ) throws -> MetadataSourceRecord {
+        try write(
+            mediaItem: mediaItem,
+            details: details,
+            images: images,
+            sourceUpdate: .match(
+                confidence: confidence,
+                matchSource: matchSource,
+                manualMatchLocked: manualMatchLocked
+            )
+        )
+    }
+
+    func refresh(
+        mediaItem: MediaItem,
+        source: MetadataSourceRecord,
+        details: MetadataDetails,
+        images: [RemoteImage]
+    ) throws -> MetadataSourceRecord {
+        guard source.provider == providerName else {
+            throw ApplicationMetadataError.providerMismatch(
+                mediaItemID: mediaItem.id,
+                expected: providerName,
+                actual: source.provider
+            )
+        }
+        return try write(
+            mediaItem: mediaItem,
+            details: details,
+            images: images,
+            sourceUpdate: .refresh(source)
+        )
+    }
+
+    private func write(
+        mediaItem: MediaItem,
+        details: MetadataDetails,
+        images: [RemoteImage],
+        sourceUpdate: SourceUpdate
+    ) throws -> MetadataSourceRecord {
         try MetadataApplicationMapper.validate(details.identifier, matches: mediaItem)
 
         return try store.withTransaction {
@@ -312,20 +433,12 @@ private struct MetadataMatchWriter {
                 try store.upsertMetadataExternalIDs(externalIDs)
             }
 
-            let sourceRecord = try MetadataSourceRecord.validated(
-                id: existingSource?.id ?? DomainID.new(),
+            let sourceRecord = try sourceRecord(
                 mediaItemID: mediaItem.id,
-                provider: providerName,
-                providerID: details.identifier.rawValue,
-                providerMediaType: details.providerMediaType,
-                confidence: confidence,
-                matchSource: matchSource,
-                manualMatchLocked: manualMatchLocked,
-                rawPayloadJSON: details.rawPayloadJSON,
-                matchedAt: writtenAt,
-                refreshedAt: writtenAt,
-                createdAt: existingSource?.createdAt ?? writtenAt,
-                updatedAt: writtenAt
+                details: details,
+                existing: existingSource,
+                sourceUpdate: sourceUpdate,
+                writtenAt: writtenAt
             )
             try store.saveMetadataSourceRecord(sourceRecord)
 
@@ -346,6 +459,15 @@ private struct MetadataMatchWriter {
 
             return sourceRecord
         }
+    }
+
+    private enum SourceUpdate {
+        case match(
+            confidence: Double,
+            matchSource: MetadataMatchSource,
+            manualMatchLocked: Bool
+        )
+        case refresh(MetadataSourceRecord)
     }
 
     private func metadataItem(
@@ -373,6 +495,49 @@ private struct MetadataMatchWriter {
             createdAt: existing?.createdAt ?? writtenAt,
             updatedAt: writtenAt
         )
+    }
+
+    private func sourceRecord(
+        mediaItemID: MediaItemID,
+        details: MetadataDetails,
+        existing: MetadataSourceRecord?,
+        sourceUpdate: SourceUpdate,
+        writtenAt: Date
+    ) throws -> MetadataSourceRecord {
+        switch sourceUpdate {
+        case .match(let confidence, let matchSource, let manualMatchLocked):
+            return try MetadataSourceRecord.validated(
+                id: existing?.id ?? DomainID.new(),
+                mediaItemID: mediaItemID,
+                provider: providerName,
+                providerID: details.identifier.rawValue,
+                providerMediaType: details.providerMediaType,
+                confidence: confidence,
+                matchSource: matchSource,
+                manualMatchLocked: manualMatchLocked,
+                rawPayloadJSON: details.rawPayloadJSON,
+                matchedAt: writtenAt,
+                refreshedAt: writtenAt,
+                createdAt: existing?.createdAt ?? writtenAt,
+                updatedAt: writtenAt
+            )
+        case .refresh(let source):
+            return try MetadataSourceRecord.validated(
+                id: source.id,
+                mediaItemID: mediaItemID,
+                provider: source.provider,
+                providerID: source.providerID,
+                providerMediaType: source.providerMediaType,
+                confidence: source.confidence,
+                matchSource: source.matchSource,
+                manualMatchLocked: source.manualMatchLocked,
+                rawPayloadJSON: details.rawPayloadJSON,
+                matchedAt: source.matchedAt,
+                refreshedAt: writtenAt,
+                createdAt: source.createdAt,
+                updatedAt: writtenAt
+            )
+        }
     }
 
     private func posterAsset(

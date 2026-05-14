@@ -475,6 +475,270 @@ final class MetadataUseCaseTests: XCTestCase {
         )
     }
 
+    func testRefreshWithoutSourceDelegatesToAutoMatch() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        let candidate = movieCandidate(id: 550, confidence: 0.96)
+        provider.searchResults = [candidate]
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Arrival Auto")
+
+        let result = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(mediaItemID: context.item.id)
+
+        XCTAssertEqual(result, .autoMatched(.matched(candidate)))
+        XCTAssertEqual(provider.searchQueries.count, 1)
+        XCTAssertEqual(provider.detailsRequests.map(\.rawValue), ["movie:550"])
+        XCTAssertEqual(
+            try context.store.fetchMetadataSourceRecord(
+                mediaItemID: context.item.id,
+                provider: .tmdb
+            )?.providerID,
+            "movie:550"
+        )
+    }
+
+    func testRefreshWithSourceUsesExactProviderIDAndDoesNotSearch() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        let matchedAt = Date(timeIntervalSince1970: 100)
+        let previousRefresh = Date(timeIntervalSince1970: 200)
+        let refreshedAt = Date(timeIntervalSince1970: 300)
+        let existingSource = try sourceRecord(
+            mediaItemID: context.item.id,
+            providerID: "movie:550",
+            confidence: 0.42,
+            matchedAt: matchedAt,
+            refreshedAt: previousRefresh
+        )
+        try context.store.saveMetadataSourceRecord(existingSource)
+        provider.detailsByID["movie:550"] = movieDetails(
+            id: 550,
+            title: "Arrival Refreshed",
+            rawPayloadJSON: #"{"refreshed":true}"#
+        )
+        provider.imagesByID["movie:550"] = [
+            RemoteImage(source: .tmdb, remotePath: "/refreshed.jpg", preferredCacheSize: "w500")
+        ]
+
+        let result = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider,
+            now: { refreshedAt }
+        ).refresh(mediaItemID: context.item.id)
+
+        let source = try XCTUnwrap(
+            context.store.fetchMetadataSourceRecord(
+                mediaItemID: context.item.id,
+                provider: .tmdb
+            )
+        )
+        XCTAssertEqual(result, .refreshed(source))
+        XCTAssertEqual(provider.searchQueries, [])
+        XCTAssertEqual(provider.detailsRequests.map(\.rawValue), ["movie:550"])
+        XCTAssertEqual(provider.imageRequests.map(\.rawValue), ["movie:550"])
+        XCTAssertEqual(source.id, existingSource.id)
+        XCTAssertEqual(source.providerID, "movie:550")
+        XCTAssertEqual(source.confidence, 0.42)
+        XCTAssertEqual(source.matchSource, .automatic)
+        XCTAssertFalse(source.manualMatchLocked)
+        XCTAssertEqual(source.matchedAt, matchedAt)
+        XCTAssertEqual(source.refreshedAt, refreshedAt)
+        XCTAssertEqual(source.rawPayloadJSON, #"{"refreshed":true}"#)
+        XCTAssertEqual(try context.store.fetchPosterAssets(mediaItemID: context.item.id).count, 1)
+    }
+
+    func testRefreshWithManualLockUsesExactProviderIDAndDoesNotSearch() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        let existingSource = try sourceRecord(
+            mediaItemID: context.item.id,
+            providerID: "movie:550",
+            confidence: 1.0,
+            matchSource: .manual,
+            manualMatchLocked: true
+        )
+        try context.store.saveMetadataSourceRecord(existingSource)
+        provider.searchResults = [movieCandidate(id: 551, confidence: 0.99)]
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Locked Refresh")
+
+        _ = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(mediaItemID: context.item.id)
+
+        let source = try XCTUnwrap(
+            context.store.fetchMetadataSourceRecord(
+                mediaItemID: context.item.id,
+                provider: .tmdb
+            )
+        )
+        XCTAssertEqual(provider.searchQueries, [])
+        XCTAssertEqual(provider.detailsRequests.map(\.rawValue), ["movie:550"])
+        XCTAssertEqual(source.providerID, "movie:550")
+        XCTAssertEqual(source.matchSource, .manual)
+        XCTAssertEqual(source.confidence, 1.0)
+        XCTAssertTrue(source.manualMatchLocked)
+    }
+
+    func testLockedTitleSurvivesRefresh() async throws {
+        let context = try makeRefreshContextWithLockedMetadata(
+            title: "Custom Title",
+            titleLocked: true
+        )
+        let provider = FakeMetadataProvider()
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Provider Title")
+
+        _ = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(mediaItemID: context.item.id)
+
+        let metadata = try XCTUnwrap(context.store.fetchMetadataItem(mediaItemID: context.item.id))
+        XCTAssertEqual(metadata.title, "Custom Title")
+        XCTAssertTrue(metadata.titleOverrideLocked)
+    }
+
+    func testLockedSummarySurvivesRefresh() async throws {
+        let context = try makeRefreshContextWithLockedMetadata(
+            summary: "Custom Summary",
+            summaryLocked: true
+        )
+        let provider = FakeMetadataProvider()
+        provider.detailsByID["movie:550"] = movieDetails(
+            id: 550,
+            title: "Provider Title",
+            summary: "Provider Summary"
+        )
+
+        _ = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(mediaItemID: context.item.id)
+
+        let metadata = try XCTUnwrap(context.store.fetchMetadataItem(mediaItemID: context.item.id))
+        XCTAssertEqual(metadata.summary, "Custom Summary")
+        XCTAssertTrue(metadata.summaryOverrideLocked)
+    }
+
+    func testLockedLanguageSurvivesRefresh() async throws {
+        let context = try makeRefreshContextWithLockedMetadata(
+            language: "fr",
+            languageLocked: true
+        )
+        let provider = FakeMetadataProvider()
+        provider.detailsByID["movie:550"] = movieDetails(
+            id: 550,
+            title: "Provider Title",
+            language: "en"
+        )
+
+        _ = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(mediaItemID: context.item.id)
+
+        let metadata = try XCTUnwrap(context.store.fetchMetadataItem(mediaItemID: context.item.id))
+        XCTAssertEqual(metadata.language, "fr")
+        XCTAssertTrue(metadata.languageOverrideLocked)
+    }
+
+    func testRefreshProviderFailureLeavesExistingMetadataUnchanged() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        let existingMetadata = MetadataItem(
+            id: "refresh-metadata-existing",
+            mediaItemID: context.item.id,
+            title: "Existing Title",
+            summary: "Existing Summary",
+            language: "en",
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let existingSource = try sourceRecord(
+            id: "refresh-source-existing",
+            mediaItemID: context.item.id,
+            providerID: "movie:550",
+            confidence: 0.8,
+            rawPayloadJSON: #"{"old":true}"#,
+            matchedAt: Date(timeIntervalSince1970: 100),
+            refreshedAt: Date(timeIntervalSince1970: 100),
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let existingPoster = try posterAsset(
+            id: "refresh-poster-existing",
+            mediaItemID: context.item.id,
+            remotePath: "/existing-refresh.jpg",
+            isSelected: true,
+            selectionSource: .manual
+        )
+        try context.store.saveMetadataItem(existingMetadata)
+        try context.store.saveMetadataSourceRecord(existingSource)
+        try context.store.savePosterAsset(existingPoster)
+        provider.detailsError = MetadataError.transportFailure
+
+        do {
+            _ = try await RefreshMetadataUseCase(
+                store: context.store,
+                provider: provider
+            ).refresh(mediaItemID: context.item.id)
+            XCTFail("Expected provider failure.")
+        } catch MetadataError.transportFailure {
+        } catch {
+            XCTFail("Expected transportFailure, got \(error).")
+        }
+
+        XCTAssertEqual(
+            try context.store.fetchMetadataItem(mediaItemID: context.item.id),
+            existingMetadata
+        )
+        XCTAssertEqual(
+            try context.store.fetchMetadataSourceRecord(
+                mediaItemID: context.item.id,
+                provider: .tmdb
+            ),
+            existingSource
+        )
+        XCTAssertEqual(try context.store.fetchPosterAssets(mediaItemID: context.item.id), [existingPoster])
+    }
+
+    func testRefreshDoesNotModifyPlaybackHistory() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        let history = PlaybackHistory(
+            id: "refresh-history-existing",
+            mediaItemID: context.item.id,
+            mediaFileID: context.file.id,
+            positionMS: 24_000,
+            durationMS: 120_000,
+            completed: false,
+            playCount: 2,
+            lastPlayedAt: Date(timeIntervalSince1970: 500),
+            createdAt: Date(timeIntervalSince1970: 500),
+            updatedAt: Date(timeIntervalSince1970: 500)
+        )
+        try context.store.savePlaybackHistory(history)
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(mediaItemID: context.item.id, providerID: "movie:550")
+        )
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Refresh Title")
+
+        _ = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(mediaItemID: context.item.id)
+
+        XCTAssertEqual(
+            try context.store.fetchPlaybackHistory(
+                mediaItemID: context.item.id,
+                mediaFileID: context.file.id
+            ),
+            history
+        )
+    }
+
     private func makeMediaContext(
         item: MediaItem = MediaItem(mediaType: .movie, title: "Arrival", year: 2016)
     ) throws -> MetadataTestContext {
@@ -507,6 +771,32 @@ final class MetadataUseCaseTests: XCTestCase {
             item: item,
             file: file
         )
+    }
+
+    private func makeRefreshContextWithLockedMetadata(
+        title: String? = nil,
+        summary: String? = nil,
+        language: String? = nil,
+        titleLocked: Bool = false,
+        summaryLocked: Bool = false,
+        languageLocked: Bool = false
+    ) throws -> MetadataTestContext {
+        let context = try makeMediaContext()
+        try context.store.saveMetadataItem(
+            MetadataItem(
+                mediaItemID: context.item.id,
+                title: title,
+                summary: summary,
+                language: language,
+                titleOverrideLocked: titleLocked,
+                summaryOverrideLocked: summaryLocked,
+                languageOverrideLocked: languageLocked
+            )
+        )
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(mediaItemID: context.item.id, providerID: "movie:550")
+        )
+        return context
     }
 
     private func movieID(_ id: Int) -> MetadataProviderIdentifier {
@@ -543,6 +833,57 @@ final class MetadataUseCaseTests: XCTestCase {
                 .imdb: "tt\(id)"
             ],
             rawPayloadJSON: rawPayloadJSON
+        )
+    }
+
+    private func sourceRecord(
+        id: MetadataSourceRecordID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        providerID: String,
+        confidence: Double = 0.9,
+        matchSource: MetadataMatchSource = .automatic,
+        manualMatchLocked: Bool = false,
+        rawPayloadJSON: String? = "{}",
+        matchedAt: Date = Date(timeIntervalSince1970: 100),
+        refreshedAt: Date? = Date(timeIntervalSince1970: 100),
+        createdAt: Date = Date(timeIntervalSince1970: 100),
+        updatedAt: Date = Date(timeIntervalSince1970: 100)
+    ) throws -> MetadataSourceRecord {
+        try MetadataSourceRecord.validated(
+            id: id,
+            mediaItemID: mediaItemID,
+            provider: .tmdb,
+            providerID: providerID,
+            providerMediaType: .movie,
+            confidence: confidence,
+            matchSource: matchSource,
+            manualMatchLocked: manualMatchLocked,
+            rawPayloadJSON: rawPayloadJSON,
+            matchedAt: matchedAt,
+            refreshedAt: refreshedAt,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    private func posterAsset(
+        id: PosterAssetID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        remotePath: String,
+        isSelected: Bool = false,
+        selectionSource: PosterSelectionSource = .automatic
+    ) throws -> PosterAsset {
+        try PosterAsset.validated(
+            id: id,
+            mediaItemID: mediaItemID,
+            assetType: .poster,
+            source: .tmdb,
+            remotePath: remotePath,
+            preferredCacheSize: "w500",
+            isSelected: isSelected,
+            selectionSource: selectionSource,
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 100)
         )
     }
 
