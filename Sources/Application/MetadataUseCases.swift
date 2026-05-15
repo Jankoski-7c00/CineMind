@@ -35,6 +35,25 @@ public enum RefreshMetadataResult: Equatable, Sendable {
     case refreshed(MetadataSourceRecord)
 }
 
+public struct RefreshLibraryMetadataResult: Equatable, Sendable {
+    public var refreshed: Int
+    public var skipped: Int
+    public var unmatched: Int
+    public var failed: Int
+
+    public init(
+        refreshed: Int = 0,
+        skipped: Int = 0,
+        unmatched: Int = 0,
+        failed: Int = 0
+    ) {
+        self.refreshed = refreshed
+        self.skipped = skipped
+        self.unmatched = unmatched
+        self.failed = failed
+    }
+}
+
 public enum MetadataOverrideField: Sendable, Equatable {
     case title
     case summary
@@ -62,6 +81,38 @@ public protocol ApplicationMetadataStore {
 }
 
 extension CineMindStore: ApplicationMetadataStore {}
+
+public protocol ApplicationLibraryMetadataRefreshStore: ApplicationMetadataStore {
+    func fetchMediaItems() throws -> [MediaItem]
+    func fetchMediaItemsMissingMetadata(limit: Int) throws -> [MediaItem]
+    func fetchMediaItemsWithStaleMetadata(
+        olderThan threshold: Date,
+        limit: Int
+    ) throws -> [MediaItem]
+}
+
+extension CineMindStore: ApplicationLibraryMetadataRefreshStore {}
+
+public protocol ApplicationPosterCaching {
+    func cache(_ image: RemoteImage) async throws -> PosterCacheResult
+}
+
+public struct ApplicationPosterCache: ApplicationPosterCaching {
+    private let posterCache: PosterCache
+    private let imageConfiguration: TMDBImageConfiguration
+
+    public init(
+        posterCache: PosterCache,
+        imageConfiguration: TMDBImageConfiguration
+    ) {
+        self.posterCache = posterCache
+        self.imageConfiguration = imageConfiguration
+    }
+
+    public func cache(_ image: RemoteImage) async throws -> PosterCacheResult {
+        try await posterCache.cache(image, using: imageConfiguration)
+    }
+}
 
 public struct SearchMetadataCandidatesUseCase {
     private let store: any ApplicationMetadataStore
@@ -98,17 +149,20 @@ public struct SearchMetadataCandidatesUseCase {
 public struct AutoMatchMetadataUseCase {
     private let store: any ApplicationMetadataStore
     private let provider: any MetadataProvider
+    private let posterCache: (any ApplicationPosterCaching)?
     private let policy: MetadataAutoMatchPolicy
     private let now: () -> Date
 
     public init(
         store: any ApplicationMetadataStore,
         provider: any MetadataProvider,
+        posterCache: (any ApplicationPosterCaching)? = nil,
         policy: MetadataAutoMatchPolicy = MetadataAutoMatchPolicy(),
         now: @escaping () -> Date = { Date() }
     ) {
         self.store = store
         self.provider = provider
+        self.posterCache = posterCache
         self.policy = policy
         self.now = now
     }
@@ -142,9 +196,10 @@ public struct AutoMatchMetadataUseCase {
             let details = try await provider.fetchDetails(identifier: candidate.identifier)
             let images = try await provider.fetchImages(identifier: candidate.identifier)
 
-            _ = try MetadataMatchWriter(
+            _ = try await MetadataMatchWriter(
                 store: store,
                 providerName: provider.providerName,
+                posterCache: posterCache,
                 now: now
             ).write(
                 mediaItem: mediaItem,
@@ -175,17 +230,20 @@ public struct AutoMatchMetadataUseCase {
 public struct RefreshMetadataUseCase {
     private let store: any ApplicationMetadataStore
     private let provider: any MetadataProvider
+    private let posterCache: (any ApplicationPosterCaching)?
     private let policy: MetadataAutoMatchPolicy
     private let now: () -> Date
 
     public init(
         store: any ApplicationMetadataStore,
         provider: any MetadataProvider,
+        posterCache: (any ApplicationPosterCaching)? = nil,
         policy: MetadataAutoMatchPolicy = MetadataAutoMatchPolicy(),
         now: @escaping () -> Date = { Date() }
     ) {
         self.store = store
         self.provider = provider
+        self.posterCache = posterCache
         self.policy = policy
         self.now = now
     }
@@ -202,6 +260,7 @@ public struct RefreshMetadataUseCase {
             let result = try await AutoMatchMetadataUseCase(
                 store: store,
                 provider: provider,
+                posterCache: posterCache,
                 policy: policy,
                 now: now
             ).match(mediaItemID: mediaItem.id, language: language)
@@ -223,9 +282,10 @@ public struct RefreshMetadataUseCase {
         let details = try await provider.fetchDetails(identifier: identifier)
         let images = try await provider.fetchImages(identifier: identifier)
 
-        let refreshedSource = try MetadataMatchWriter(
+        let refreshedSource = try await MetadataMatchWriter(
             store: store,
             providerName: provider.providerName,
+            posterCache: posterCache,
             now: now
         ).refresh(
             mediaItem: mediaItem,
@@ -247,15 +307,18 @@ public struct RefreshMetadataUseCase {
 public struct ManualMatchMetadataUseCase {
     private let store: any ApplicationMetadataStore
     private let provider: any MetadataProvider
+    private let posterCache: (any ApplicationPosterCaching)?
     private let now: () -> Date
 
     public init(
         store: any ApplicationMetadataStore,
         provider: any MetadataProvider,
+        posterCache: (any ApplicationPosterCaching)? = nil,
         now: @escaping () -> Date = { Date() }
     ) {
         self.store = store
         self.provider = provider
+        self.posterCache = posterCache
         self.now = now
     }
 
@@ -275,9 +338,10 @@ public struct ManualMatchMetadataUseCase {
         let details = try await provider.fetchDetails(identifier: identifier)
         let images = try await provider.fetchImages(identifier: identifier)
 
-        return try MetadataMatchWriter(
+        return try await MetadataMatchWriter(
             store: store,
             providerName: provider.providerName,
+            posterCache: posterCache,
             now: now
         ).write(
             mediaItem: mediaItem,
@@ -294,6 +358,129 @@ public struct ManualMatchMetadataUseCase {
             throw ApplicationMetadataError.mediaItemNotFound(mediaItemID)
         }
         return mediaItem
+    }
+}
+
+public struct RefreshLibraryMetadataUseCase {
+    public static let defaultStaleInterval: TimeInterval = 30 * 24 * 60 * 60
+
+    private let store: any ApplicationLibraryMetadataRefreshStore
+    private let provider: any MetadataProvider
+    private let posterCache: (any ApplicationPosterCaching)?
+    private let policy: MetadataAutoMatchPolicy
+    private let now: () -> Date
+
+    public init(
+        store: any ApplicationLibraryMetadataRefreshStore,
+        provider: any MetadataProvider,
+        posterCache: (any ApplicationPosterCaching)? = nil,
+        policy: MetadataAutoMatchPolicy = MetadataAutoMatchPolicy(),
+        now: @escaping () -> Date = { Date() }
+    ) {
+        self.store = store
+        self.provider = provider
+        self.posterCache = posterCache
+        self.policy = policy
+        self.now = now
+    }
+
+    public func refresh(
+        limit: Int,
+        staleThreshold: Date? = nil,
+        force: Bool = false,
+        language: String? = nil
+    ) async throws -> RefreshLibraryMetadataResult {
+        guard limit > 0 else {
+            return RefreshLibraryMetadataResult()
+        }
+
+        let threshold = staleThreshold ?? now().addingTimeInterval(-Self.defaultStaleInterval)
+        let mediaItems = try mediaItemsToRefresh(
+            limit: limit,
+            staleThreshold: threshold,
+            force: force
+        )
+        var result = RefreshLibraryMetadataResult()
+        let refreshUseCase = RefreshMetadataUseCase(
+            store: store,
+            provider: provider,
+            posterCache: posterCache,
+            policy: policy,
+            now: now
+        )
+
+        for mediaItem in mediaItems {
+            do {
+                let itemResult = try await refreshUseCase.refresh(
+                    mediaItemID: mediaItem.id,
+                    language: language
+                )
+                result.record(itemResult)
+            } catch {
+                result.failed += 1
+            }
+        }
+
+        return result
+    }
+
+    private func mediaItemsToRefresh(
+        limit: Int,
+        staleThreshold: Date,
+        force: Bool
+    ) throws -> [MediaItem] {
+        if force {
+            return Array(try store.fetchMediaItems().prefix(limit))
+        }
+
+        var mediaItems: [MediaItem] = []
+        var seenIDs = Set<MediaItemID>()
+
+        func appendIfNeeded(_ item: MediaItem) {
+            guard mediaItems.count < limit,
+                  !seenIDs.contains(item.id) else {
+                return
+            }
+            seenIDs.insert(item.id)
+            mediaItems.append(item)
+        }
+
+        for item in try store.fetchMediaItemsMissingMetadata(limit: limit) {
+            appendIfNeeded(item)
+        }
+
+        if mediaItems.count < limit {
+            for item in try store.fetchMediaItemsWithStaleMetadata(
+                olderThan: staleThreshold,
+                limit: limit
+            ) {
+                appendIfNeeded(item)
+            }
+        }
+
+        return mediaItems
+    }
+}
+
+private extension RefreshLibraryMetadataResult {
+    mutating func record(_ itemResult: RefreshMetadataResult) {
+        switch itemResult {
+        case .refreshed:
+            refreshed += 1
+        case .autoMatched(let autoMatchResult):
+            record(autoMatchResult)
+        }
+    }
+
+    mutating func record(_ autoMatchResult: AutoMatchMetadataResult) {
+        switch autoMatchResult {
+        case .matched:
+            refreshed += 1
+        case .skippedManualLock:
+            skipped += 1
+        case .noCandidates, .lowConfidence, .ambiguous:
+            unmatched += 1
+        }
     }
 }
 
@@ -518,6 +705,7 @@ private enum MetadataApplicationMapper {
 private struct MetadataMatchWriter {
     let store: any ApplicationMetadataStore
     let providerName: MetadataProviderName
+    let posterCache: (any ApplicationPosterCaching)?
     let now: () -> Date
 
     func write(
@@ -527,8 +715,8 @@ private struct MetadataMatchWriter {
         confidence: Double,
         matchSource: MetadataMatchSource,
         manualMatchLocked: Bool
-    ) throws -> MetadataSourceRecord {
-        try write(
+    ) async throws -> MetadataSourceRecord {
+        try await write(
             mediaItem: mediaItem,
             details: details,
             images: images,
@@ -545,7 +733,7 @@ private struct MetadataMatchWriter {
         source: MetadataSourceRecord,
         details: MetadataDetails,
         images: [RemoteImage]
-    ) throws -> MetadataSourceRecord {
+    ) async throws -> MetadataSourceRecord {
         guard source.provider == providerName else {
             throw ApplicationMetadataError.providerMismatch(
                 mediaItemID: mediaItem.id,
@@ -553,7 +741,7 @@ private struct MetadataMatchWriter {
                 actual: source.provider
             )
         }
-        return try write(
+        return try await write(
             mediaItem: mediaItem,
             details: details,
             images: images,
@@ -566,8 +754,14 @@ private struct MetadataMatchWriter {
         details: MetadataDetails,
         images: [RemoteImage],
         sourceUpdate: SourceUpdate
-    ) throws -> MetadataSourceRecord {
+    ) async throws -> MetadataSourceRecord {
         try MetadataApplicationMapper.validate(details.identifier, matches: mediaItem)
+        let existingPostersForCache = try store.fetchPosterAssets(mediaItemID: mediaItem.id)
+        let cachedPoster = await cachedPoster(
+            mediaItemID: mediaItem.id,
+            images: images,
+            existingPosters: existingPostersForCache
+        )
 
         return try store.withTransaction {
             let writtenAt = now()
@@ -619,6 +813,7 @@ private struct MetadataMatchWriter {
                     mediaItemID: mediaItem.id,
                     image: image,
                     existing: posterByIdentity[PosterIdentity(image)],
+                    cachedPoster: cachedPoster,
                     writtenAt: writtenAt
                 )
                 try store.savePosterAsset(poster)
@@ -626,6 +821,40 @@ private struct MetadataMatchWriter {
 
             return sourceRecord
         }
+    }
+
+    private func cachedPoster(
+        mediaItemID: MediaItemID,
+        images: [RemoteImage],
+        existingPosters: [PosterAsset]
+    ) async -> CachedPoster? {
+        guard let posterCache,
+              let image = imageToCache(images: images, existingPosters: existingPosters) else {
+            return nil
+        }
+
+        do {
+            let result = try await posterCache.cache(image)
+            return CachedPoster(mediaItemID: mediaItemID, image: image, result: result)
+        } catch {
+            return nil
+        }
+    }
+
+    private func imageToCache(
+        images: [RemoteImage],
+        existingPosters: [PosterAsset]
+    ) -> RemoteImage? {
+        guard !images.isEmpty else {
+            return nil
+        }
+
+        if let selectedPoster = existingPosters.first(where: \.isSelected),
+           let selectedImage = images.first(where: { PosterIdentity($0) == PosterIdentity(selectedPoster) }) {
+            return selectedImage
+        }
+
+        return images[0]
     }
 
     private enum SourceUpdate {
@@ -711,9 +940,11 @@ private struct MetadataMatchWriter {
         mediaItemID: MediaItemID,
         image: RemoteImage,
         existing: PosterAsset?,
+        cachedPoster: CachedPoster?,
         writtenAt: Date
     ) throws -> PosterAsset {
-        try PosterAsset.validated(
+        let cacheResult = cachedPoster?.result(for: mediaItemID, image: image)
+        return try PosterAsset.validated(
             id: existing?.id ?? DomainID.new(),
             mediaItemID: mediaItemID,
             assetType: .poster,
@@ -722,13 +953,37 @@ private struct MetadataMatchWriter {
             width: image.width,
             height: image.height,
             preferredCacheSize: image.preferredCacheSize,
-            localCachePath: existing?.localCachePath,
-            cachedAt: existing?.cachedAt,
+            localCachePath: cacheResult?.localPath ?? existing?.localCachePath,
+            cachedAt: cacheResult?.cachedAt ?? existing?.cachedAt,
             isSelected: existing?.isSelected ?? false,
             selectionSource: existing?.selectionSource ?? .automatic,
             createdAt: existing?.createdAt ?? writtenAt,
             updatedAt: writtenAt
         )
+    }
+}
+
+private struct CachedPoster {
+    let mediaItemID: MediaItemID
+    let imageIdentity: PosterIdentity
+    let result: PosterCacheResult
+
+    init(
+        mediaItemID: MediaItemID,
+        image: RemoteImage,
+        result: PosterCacheResult
+    ) {
+        self.mediaItemID = mediaItemID
+        self.imageIdentity = PosterIdentity(image)
+        self.result = result
+    }
+
+    func result(for mediaItemID: MediaItemID, image: RemoteImage) -> PosterCacheResult? {
+        guard self.mediaItemID == mediaItemID,
+              imageIdentity == PosterIdentity(image) else {
+            return nil
+        }
+        return result
     }
 }
 

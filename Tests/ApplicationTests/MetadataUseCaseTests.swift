@@ -739,6 +739,410 @@ final class MetadataUseCaseTests: XCTestCase {
         )
     }
 
+    func testRefreshLibraryProcessesMissingBeforeStaleAndDeduplicatesOverlap() async throws {
+        let missingOverlap = MediaItem(
+            mediaType: .movie,
+            title: "Missing Overlap",
+            year: 2010,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+        let context = try makeMediaContext(item: missingOverlap)
+        let stale = MediaItem(
+            mediaType: .movie,
+            title: "Stale",
+            year: 2011,
+            createdAt: Date(timeIntervalSince1970: 100)
+        )
+        try addMediaItem(stale, to: context.store)
+        try context.store.saveMetadataItem(
+            MetadataItem(mediaItemID: stale.id, title: "Stale Existing")
+        )
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(
+                mediaItemID: missingOverlap.id,
+                providerID: "movie:550",
+                refreshedAt: nil
+            )
+        )
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(
+                mediaItemID: stale.id,
+                providerID: "movie:551",
+                refreshedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        let provider = FakeMetadataProvider()
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Missing Refreshed")
+        provider.detailsByID["movie:551"] = movieDetails(id: 551, title: "Stale Refreshed")
+
+        let result = try await RefreshLibraryMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(
+            limit: 2,
+            staleThreshold: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(result, RefreshLibraryMetadataResult(refreshed: 2))
+        XCTAssertEqual(provider.detailsRequests.map(\.rawValue), ["movie:550", "movie:551"])
+        XCTAssertEqual(provider.searchQueries, [])
+    }
+
+    func testRefreshLibraryLimitIsRespected() async throws {
+        let context = try makeMediaContext()
+        let stale = MediaItem(mediaType: .movie, title: "Stale", year: 2011)
+        try addMediaItem(stale, to: context.store)
+        try context.store.saveMetadataItem(
+            MetadataItem(mediaItemID: stale.id, title: "Stale Existing")
+        )
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(
+                mediaItemID: context.item.id,
+                providerID: "movie:550",
+                refreshedAt: nil
+            )
+        )
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(
+                mediaItemID: stale.id,
+                providerID: "movie:551",
+                refreshedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        let provider = FakeMetadataProvider()
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Only Item")
+        provider.detailsByID["movie:551"] = movieDetails(id: 551, title: "Should Not Run")
+
+        let result = try await RefreshLibraryMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(
+            limit: 1,
+            staleThreshold: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(result, RefreshLibraryMetadataResult(refreshed: 1))
+        XCTAssertEqual(provider.detailsRequests.map(\.rawValue), ["movie:550"])
+    }
+
+    func testRefreshLibraryItemFailureIncrementsFailedAndContinues() async throws {
+        let first = MediaItem(
+            mediaType: .movie,
+            title: "First",
+            year: 2010,
+            createdAt: Date(timeIntervalSince1970: 100)
+        )
+        let context = try makeMediaContext(item: first)
+        let second = MediaItem(
+            mediaType: .movie,
+            title: "Second",
+            year: 2011,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+        try addMediaItem(second, to: context.store)
+        try context.store.saveMetadataItem(
+            MetadataItem(mediaItemID: first.id, title: "First Existing")
+        )
+        try context.store.saveMetadataItem(
+            MetadataItem(mediaItemID: second.id, title: "Second Existing")
+        )
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(
+                mediaItemID: first.id,
+                providerID: "movie:550",
+                refreshedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(
+                mediaItemID: second.id,
+                providerID: "movie:551",
+                refreshedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        let provider = FakeMetadataProvider()
+        provider.detailsErrorsByID["movie:550"] = MetadataError.transportFailure
+        provider.detailsByID["movie:551"] = movieDetails(id: 551, title: "Second Refreshed")
+
+        let result = try await RefreshLibraryMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(
+            limit: 2,
+            staleThreshold: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(result, RefreshLibraryMetadataResult(refreshed: 1, failed: 1))
+        XCTAssertEqual(provider.detailsRequests.map(\.rawValue), ["movie:550", "movie:551"])
+        XCTAssertEqual(
+            try context.store.fetchMetadataItem(mediaItemID: second.id)?.title,
+            "Second Refreshed"
+        )
+    }
+
+    func testRefreshLibraryUnmatchedIncrementsUnmatched() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+
+        let result = try await RefreshLibraryMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(limit: 1)
+
+        XCTAssertEqual(result, RefreshLibraryMetadataResult(unmatched: 1))
+        XCTAssertEqual(provider.searchQueries.count, 1)
+        XCTAssertEqual(provider.detailsRequests, [])
+    }
+
+    func testRefreshLibraryAutoMatchIncrementsRefreshed() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        provider.searchResults = [movieCandidate(id: 550, confidence: 0.96)]
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Auto Batch")
+
+        let result = try await RefreshLibraryMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(limit: 1)
+
+        XCTAssertEqual(result, RefreshLibraryMetadataResult(refreshed: 1))
+        XCTAssertEqual(
+            try context.store.fetchMetadataItem(mediaItemID: context.item.id)?.title,
+            "Auto Batch"
+        )
+    }
+
+    func testRefreshLibraryManualLockedItemFollowsItemRefreshBehavior() async throws {
+        let context = try makeMediaContext()
+        try context.store.saveMetadataItem(
+            MetadataItem(mediaItemID: context.item.id, title: "Locked Existing")
+        )
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(
+                mediaItemID: context.item.id,
+                providerID: "movie:550",
+                confidence: 1.0,
+                matchSource: .manual,
+                manualMatchLocked: true,
+                refreshedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        let provider = FakeMetadataProvider()
+        provider.searchResults = [movieCandidate(id: 551, confidence: 0.99)]
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Locked Batch")
+
+        let result = try await RefreshLibraryMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(
+            limit: 1,
+            staleThreshold: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(result, RefreshLibraryMetadataResult(refreshed: 1))
+        XCTAssertEqual(provider.searchQueries, [])
+        XCTAssertEqual(provider.detailsRequests.map(\.rawValue), ["movie:550"])
+        let source = try XCTUnwrap(
+            context.store.fetchMetadataSourceRecord(
+                mediaItemID: context.item.id,
+                provider: .tmdb
+            )
+        )
+        XCTAssertTrue(source.manualMatchLocked)
+        XCTAssertEqual(source.matchSource, .manual)
+    }
+
+    func testPosterCacheSuccessWritesLocalPathAndTimestamp() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        let posterCache = FakePosterCache()
+        let cachedAt = Date(timeIntervalSince1970: 2_000)
+        provider.searchResults = [movieCandidate(id: 550, confidence: 0.96)]
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Cached Poster")
+        provider.imagesByID["movie:550"] = [
+            RemoteImage(source: .tmdb, remotePath: "/cached.jpg", preferredCacheSize: "w500")
+        ]
+        posterCache.resultsByRemotePath["/cached.jpg"] = PosterCacheResult(
+            localPath: "/cache/cached.jpg",
+            cachedAt: cachedAt,
+            byteCount: 123,
+            state: .miss
+        )
+
+        _ = try await AutoMatchMetadataUseCase(
+            store: context.store,
+            provider: provider,
+            posterCache: posterCache
+        ).match(mediaItemID: context.item.id)
+
+        let poster = try XCTUnwrap(
+            try context.store.fetchPosterAssets(mediaItemID: context.item.id).first
+        )
+        XCTAssertEqual(poster.localCachePath, "/cache/cached.jpg")
+        XCTAssertEqual(poster.cachedAt, cachedAt)
+        XCTAssertEqual(posterCache.requests.map(\.remotePath), ["/cached.jpg"])
+    }
+
+    func testPosterCacheFailurePreservesExistingCacheFields() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        let posterCache = FakePosterCache()
+        let existingCachedAt = Date(timeIntervalSince1970: 1_000)
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(mediaItemID: context.item.id, providerID: "movie:550")
+        )
+        try context.store.savePosterAsset(
+            try posterAsset(
+                id: "poster-cached-existing",
+                mediaItemID: context.item.id,
+                remotePath: "/cached-existing.jpg",
+                localCachePath: "/cache/existing.jpg",
+                cachedAt: existingCachedAt
+            )
+        )
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Cache Failure")
+        provider.imagesByID["movie:550"] = [
+            RemoteImage(
+                source: .tmdb,
+                remotePath: "/cached-existing.jpg",
+                preferredCacheSize: "w500"
+            )
+        ]
+        posterCache.errorsByRemotePath["/cached-existing.jpg"] = MetadataError.transportFailure
+
+        _ = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider,
+            posterCache: posterCache
+        ).refresh(mediaItemID: context.item.id)
+
+        let poster = try XCTUnwrap(
+            try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+                .first { $0.remotePath == "/cached-existing.jpg" }
+        )
+        XCTAssertEqual(poster.localCachePath, "/cache/existing.jpg")
+        XCTAssertEqual(poster.cachedAt, existingCachedAt)
+        XCTAssertEqual(
+            try context.store.fetchMetadataItem(mediaItemID: context.item.id)?.title,
+            "Cache Failure"
+        )
+    }
+
+    func testPosterCacheFailureStoresNewPosterWithoutCacheFields() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        let posterCache = FakePosterCache()
+        provider.searchResults = [movieCandidate(id: 550, confidence: 0.96)]
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Uncached Poster")
+        provider.imagesByID["movie:550"] = [
+            RemoteImage(source: .tmdb, remotePath: "/uncached.jpg", preferredCacheSize: "w500")
+        ]
+        posterCache.errorsByRemotePath["/uncached.jpg"] = MetadataError.transportFailure
+
+        _ = try await AutoMatchMetadataUseCase(
+            store: context.store,
+            provider: provider,
+            posterCache: posterCache
+        ).match(mediaItemID: context.item.id)
+
+        let poster = try XCTUnwrap(
+            try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+                .first { $0.remotePath == "/uncached.jpg" }
+        )
+        XCTAssertNil(poster.localCachePath)
+        XCTAssertNil(poster.cachedAt)
+        XCTAssertEqual(
+            try context.store.fetchMetadataItem(mediaItemID: context.item.id)?.title,
+            "Uncached Poster"
+        )
+    }
+
+    func testManualSelectedPosterSurvivesRefreshWhenProviderOmitsIt() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        let posterCache = FakePosterCache()
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(mediaItemID: context.item.id, providerID: "movie:550")
+        )
+        let manualPoster = try posterAsset(
+            id: "poster-manual-selected",
+            mediaItemID: context.item.id,
+            remotePath: "/manual-selected.jpg",
+            isSelected: true,
+            selectionSource: .manual
+        )
+        try context.store.savePosterAsset(manualPoster)
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Omitted Manual Poster")
+        provider.imagesByID["movie:550"] = [
+            RemoteImage(source: .tmdb, remotePath: "/new-poster.jpg", preferredCacheSize: "w500")
+        ]
+        posterCache.resultsByRemotePath["/new-poster.jpg"] = PosterCacheResult(
+            localPath: "/cache/new-poster.jpg",
+            cachedAt: Date(timeIntervalSince1970: 2_000),
+            byteCount: 123,
+            state: .miss
+        )
+
+        _ = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider,
+            posterCache: posterCache
+        ).refresh(mediaItemID: context.item.id)
+
+        let posters = try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+        let selected = try XCTUnwrap(posters.first { $0.id == manualPoster.id })
+        XCTAssertTrue(selected.isSelected)
+        XCTAssertEqual(selected.selectionSource, .manual)
+        let newPoster = try XCTUnwrap(posters.first { $0.remotePath == "/new-poster.jpg" })
+        XCTAssertFalse(newPoster.isSelected)
+        XCTAssertEqual(newPoster.localCachePath, "/cache/new-poster.jpg")
+    }
+
+    func testRefreshLibraryDoesNotModifyPlaybackHistory() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        let history = PlaybackHistory(
+            id: "refresh-library-history-existing",
+            mediaItemID: context.item.id,
+            mediaFileID: context.file.id,
+            positionMS: 24_000,
+            durationMS: 120_000,
+            completed: false,
+            playCount: 2,
+            lastPlayedAt: Date(timeIntervalSince1970: 500),
+            createdAt: Date(timeIntervalSince1970: 500),
+            updatedAt: Date(timeIntervalSince1970: 500)
+        )
+        try context.store.savePlaybackHistory(history)
+        try context.store.saveMetadataItem(
+            MetadataItem(mediaItemID: context.item.id, title: "Existing")
+        )
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(
+                mediaItemID: context.item.id,
+                providerID: "movie:550",
+                refreshedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Batch Refresh")
+
+        _ = try await RefreshLibraryMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(
+            limit: 1,
+            staleThreshold: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(
+            try context.store.fetchPlaybackHistory(
+                mediaItemID: context.item.id,
+                mediaFileID: context.file.id
+            ),
+            history
+        )
+    }
+
     func testSetTitleOverrideCreatesMetadataItemWhenMissing() throws {
         let context = try makeMediaContext()
         let now = Date(timeIntervalSince1970: 1_000)
@@ -1177,6 +1581,31 @@ final class MetadataUseCaseTests: XCTestCase {
         return context
     }
 
+    @discardableResult
+    private func addMediaItem(
+        _ item: MediaItem,
+        to store: CineMindStore
+    ) throws -> MediaFile {
+        let library = try XCTUnwrap(try store.fetchLibrary())
+        let folder = try XCTUnwrap(try store.fetchLibraryFolders(libraryID: library.id).first)
+        let file = MediaFile(
+            mediaItemID: item.id,
+            libraryFolderID: folder.id,
+            relativePath: "\(item.id).mkv",
+            absolutePathHash: "metadata-test-\(UUID().uuidString)",
+            fileName: "\(item.id).mkv",
+            fileExtension: "mkv",
+            fileSizeBytes: 1,
+            modifiedAt: Date(timeIntervalSince1970: 100),
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        try store.saveMediaItem(item)
+        try store.saveMediaFile(file)
+        return file
+    }
+
     private func movieID(_ id: Int) -> MetadataProviderIdentifier {
         MetadataProviderIdentifier.movie(id: id)!
     }
@@ -1249,7 +1678,9 @@ final class MetadataUseCaseTests: XCTestCase {
         mediaItemID: MediaItemID,
         remotePath: String,
         isSelected: Bool = false,
-        selectionSource: PosterSelectionSource = .automatic
+        selectionSource: PosterSelectionSource = .automatic,
+        localCachePath: String? = nil,
+        cachedAt: Date? = nil
     ) throws -> PosterAsset {
         try PosterAsset.validated(
             id: id,
@@ -1258,6 +1689,8 @@ final class MetadataUseCaseTests: XCTestCase {
             source: .tmdb,
             remotePath: remotePath,
             preferredCacheSize: "w500",
+            localCachePath: localCachePath,
+            cachedAt: cachedAt,
             isSelected: isSelected,
             selectionSource: selectionSource,
             createdAt: Date(timeIntervalSince1970: 100),
@@ -1296,6 +1729,7 @@ private final class FakeMetadataProvider: MetadataProvider {
     var imagesByID: [String: [RemoteImage]] = [:]
     var searchError: Error?
     var detailsError: Error?
+    var detailsErrorsByID: [String: Error] = [:]
     var imagesError: Error?
 
     private(set) var searchQueries: [MetadataSearchQuery] = []
@@ -1312,6 +1746,9 @@ private final class FakeMetadataProvider: MetadataProvider {
 
     func fetchDetails(identifier: MetadataProviderIdentifier) async throws -> MetadataDetails {
         detailsRequests.append(identifier)
+        if let error = detailsErrorsByID[identifier.rawValue] {
+            throw error
+        }
         if let detailsError {
             throw detailsError
         }
@@ -1327,5 +1764,23 @@ private final class FakeMetadataProvider: MetadataProvider {
             throw imagesError
         }
         return imagesByID[identifier.rawValue] ?? []
+    }
+}
+
+private final class FakePosterCache: ApplicationPosterCaching {
+    var resultsByRemotePath: [String: PosterCacheResult] = [:]
+    var errorsByRemotePath: [String: Error] = [:]
+
+    private(set) var requests: [RemoteImage] = []
+
+    func cache(_ image: RemoteImage) async throws -> PosterCacheResult {
+        requests.append(image)
+        if let error = errorsByRemotePath[image.remotePath] {
+            throw error
+        }
+        if let result = resultsByRemotePath[image.remotePath] {
+            return result
+        }
+        throw MetadataError.notFound
     }
 }
