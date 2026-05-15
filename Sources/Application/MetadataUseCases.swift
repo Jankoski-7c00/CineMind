@@ -5,6 +5,7 @@ import Persistence
 
 public enum ApplicationMetadataError: Error, Sendable, Equatable {
     case mediaItemNotFound(MediaItemID)
+    case posterAssetMediaItemMismatch(mediaItemID: MediaItemID, posterAssetID: PosterAssetID)
     case missingEpisodeInfo(MediaItemID)
     case invalidProviderID(String)
     case providerMismatch(
@@ -34,6 +35,12 @@ public enum RefreshMetadataResult: Equatable, Sendable {
     case refreshed(MetadataSourceRecord)
 }
 
+public enum MetadataOverrideField: Sendable, Equatable {
+    case title
+    case summary
+    case language
+}
+
 public protocol ApplicationMetadataStore {
     func fetchMediaItem(id: MediaItemID) throws -> MediaItem?
     func fetchMetadataItem(mediaItemID: MediaItemID) throws -> MetadataItem?
@@ -46,6 +53,11 @@ public protocol ApplicationMetadataStore {
     func saveMetadataSourceRecord(_ record: MetadataSourceRecord) throws
     func fetchPosterAssets(mediaItemID: MediaItemID) throws -> [PosterAsset]
     func savePosterAsset(_ asset: PosterAsset) throws
+    func selectPosterAsset(
+        id: PosterAssetID,
+        mediaItemID: MediaItemID,
+        selectionSource: PosterSelectionSource
+    ) throws
     func withTransaction<T>(_ body: () throws -> T) throws -> T
 }
 
@@ -275,6 +287,161 @@ public struct ManualMatchMetadataUseCase {
             matchSource: .manual,
             manualMatchLocked: true
         )
+    }
+
+    private func fetchMediaItem(_ mediaItemID: MediaItemID) throws -> MediaItem {
+        guard let mediaItem = try store.fetchMediaItem(id: mediaItemID) else {
+            throw ApplicationMetadataError.mediaItemNotFound(mediaItemID)
+        }
+        return mediaItem
+    }
+}
+
+public struct SetMetadataOverrideUseCase {
+    private let store: any ApplicationMetadataStore
+    private let now: () -> Date
+
+    public init(
+        store: any ApplicationMetadataStore,
+        now: @escaping () -> Date = { Date() }
+    ) {
+        self.store = store
+        self.now = now
+    }
+
+    public func set(
+        mediaItemID: MediaItemID,
+        field: MetadataOverrideField,
+        value: String?
+    ) throws -> MetadataItem {
+        let mediaItem = try fetchMediaItem(mediaItemID)
+
+        return try store.withTransaction {
+            let writtenAt = now()
+            let existing = try store.fetchMetadataItem(mediaItemID: mediaItem.id)
+            var metadata = MetadataItem(
+                id: existing?.id ?? DomainID.new(),
+                mediaItemID: mediaItem.id,
+                title: existing?.title,
+                originalTitle: existing?.originalTitle,
+                summary: existing?.summary,
+                language: existing?.language,
+                releaseDate: existing?.releaseDate,
+                airDate: existing?.airDate,
+                titleOverrideLocked: existing?.titleOverrideLocked ?? false,
+                summaryOverrideLocked: existing?.summaryOverrideLocked ?? false,
+                languageOverrideLocked: existing?.languageOverrideLocked ?? false,
+                createdAt: existing?.createdAt ?? writtenAt,
+                updatedAt: writtenAt
+            )
+
+            switch field {
+            case .title:
+                metadata.title = value
+                metadata.titleOverrideLocked = true
+            case .summary:
+                metadata.summary = value
+                metadata.summaryOverrideLocked = true
+            case .language:
+                metadata.language = value
+                metadata.languageOverrideLocked = true
+            }
+
+            try store.saveMetadataItem(metadata)
+            return metadata
+        }
+    }
+
+    private func fetchMediaItem(_ mediaItemID: MediaItemID) throws -> MediaItem {
+        guard let mediaItem = try store.fetchMediaItem(id: mediaItemID) else {
+            throw ApplicationMetadataError.mediaItemNotFound(mediaItemID)
+        }
+        return mediaItem
+    }
+}
+
+public struct ClearMetadataOverrideUseCase {
+    private let store: any ApplicationMetadataStore
+    private let now: () -> Date
+
+    public init(
+        store: any ApplicationMetadataStore,
+        now: @escaping () -> Date = { Date() }
+    ) {
+        self.store = store
+        self.now = now
+    }
+
+    public func clear(
+        mediaItemID: MediaItemID,
+        field: MetadataOverrideField
+    ) throws -> MetadataItem? {
+        let mediaItem = try fetchMediaItem(mediaItemID)
+
+        return try store.withTransaction {
+            guard var metadata = try store.fetchMetadataItem(mediaItemID: mediaItem.id) else {
+                return nil
+            }
+
+            let didClear: Bool
+            switch field {
+            case .title:
+                didClear = metadata.titleOverrideLocked
+                metadata.titleOverrideLocked = false
+            case .summary:
+                didClear = metadata.summaryOverrideLocked
+                metadata.summaryOverrideLocked = false
+            case .language:
+                didClear = metadata.languageOverrideLocked
+                metadata.languageOverrideLocked = false
+            }
+
+            guard didClear else {
+                return metadata
+            }
+
+            metadata.updatedAt = now()
+            try store.saveMetadataItem(metadata)
+            return metadata
+        }
+    }
+
+    private func fetchMediaItem(_ mediaItemID: MediaItemID) throws -> MediaItem {
+        guard let mediaItem = try store.fetchMediaItem(id: mediaItemID) else {
+            throw ApplicationMetadataError.mediaItemNotFound(mediaItemID)
+        }
+        return mediaItem
+    }
+}
+
+public struct SelectPosterAssetUseCase {
+    private let store: any ApplicationMetadataStore
+
+    public init(store: any ApplicationMetadataStore) {
+        self.store = store
+    }
+
+    public func select(
+        mediaItemID: MediaItemID,
+        posterAssetID: PosterAssetID
+    ) throws {
+        let mediaItem = try fetchMediaItem(mediaItemID)
+
+        try store.withTransaction {
+            let posters = try store.fetchPosterAssets(mediaItemID: mediaItem.id)
+            guard posters.contains(where: { $0.id == posterAssetID }) else {
+                throw ApplicationMetadataError.posterAssetMediaItemMismatch(
+                    mediaItemID: mediaItem.id,
+                    posterAssetID: posterAssetID
+                )
+            }
+
+            try store.selectPosterAsset(
+                id: posterAssetID,
+                mediaItemID: mediaItem.id,
+                selectionSource: .manual
+            )
+        }
     }
 
     private func fetchMediaItem(_ mediaItemID: MediaItemID) throws -> MediaItem {

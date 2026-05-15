@@ -739,6 +739,384 @@ final class MetadataUseCaseTests: XCTestCase {
         )
     }
 
+    func testSetTitleOverrideCreatesMetadataItemWhenMissing() throws {
+        let context = try makeMediaContext()
+        let now = Date(timeIntervalSince1970: 1_000)
+
+        let metadata = try SetMetadataOverrideUseCase(
+            store: context.store,
+            now: { now }
+        ).set(
+            mediaItemID: context.item.id,
+            field: .title,
+            value: "Manual Title"
+        )
+
+        XCTAssertEqual(metadata, try context.store.fetchMetadataItem(mediaItemID: context.item.id))
+        XCTAssertEqual(metadata.mediaItemID, context.item.id)
+        XCTAssertEqual(metadata.title, "Manual Title")
+        XCTAssertNil(metadata.summary)
+        XCTAssertNil(metadata.language)
+        XCTAssertTrue(metadata.titleOverrideLocked)
+        XCTAssertFalse(metadata.summaryOverrideLocked)
+        XCTAssertFalse(metadata.languageOverrideLocked)
+        XCTAssertEqual(metadata.createdAt, now)
+        XCTAssertEqual(metadata.updatedAt, now)
+    }
+
+    func testSetTitleOverridePreservesExistingSummaryLanguageAndMetadataFields() throws {
+        let context = try makeMediaContext()
+        let createdAt = Date(timeIntervalSince1970: 100)
+        let updatedAt = Date(timeIntervalSince1970: 200)
+        let now = Date(timeIntervalSince1970: 1_000)
+        try context.store.saveMetadataItem(
+            MetadataItem(
+                id: "override-existing-metadata",
+                mediaItemID: context.item.id,
+                title: "Provider Title",
+                originalTitle: "Original Provider Title",
+                summary: "Existing Summary",
+                language: "fr",
+                releaseDate: "2016-11-11",
+                airDate: "2016-11-12",
+                summaryOverrideLocked: true,
+                languageOverrideLocked: true,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
+        )
+
+        let metadata = try SetMetadataOverrideUseCase(
+            store: context.store,
+            now: { now }
+        ).set(
+            mediaItemID: context.item.id,
+            field: .title,
+            value: "Manual Title"
+        )
+
+        XCTAssertEqual(metadata.id, "override-existing-metadata")
+        XCTAssertEqual(metadata.title, "Manual Title")
+        XCTAssertEqual(metadata.originalTitle, "Original Provider Title")
+        XCTAssertEqual(metadata.summary, "Existing Summary")
+        XCTAssertEqual(metadata.language, "fr")
+        XCTAssertEqual(metadata.releaseDate, "2016-11-11")
+        XCTAssertEqual(metadata.airDate, "2016-11-12")
+        XCTAssertTrue(metadata.titleOverrideLocked)
+        XCTAssertTrue(metadata.summaryOverrideLocked)
+        XCTAssertTrue(metadata.languageOverrideLocked)
+        XCTAssertEqual(metadata.createdAt, createdAt)
+        XCTAssertEqual(metadata.updatedAt, now)
+    }
+
+    func testSetSummaryOverrideLocksOnlySummary() throws {
+        let context = try makeMediaContext()
+        try context.store.saveMetadataItem(
+            MetadataItem(
+                mediaItemID: context.item.id,
+                title: "Existing Title",
+                summary: "Existing Summary",
+                language: "en"
+            )
+        )
+
+        let metadata = try SetMetadataOverrideUseCase(store: context.store).set(
+            mediaItemID: context.item.id,
+            field: .summary,
+            value: "Manual Summary"
+        )
+
+        XCTAssertEqual(metadata.title, "Existing Title")
+        XCTAssertEqual(metadata.summary, "Manual Summary")
+        XCTAssertEqual(metadata.language, "en")
+        XCTAssertFalse(metadata.titleOverrideLocked)
+        XCTAssertTrue(metadata.summaryOverrideLocked)
+        XCTAssertFalse(metadata.languageOverrideLocked)
+    }
+
+    func testSetLanguageOverrideLocksOnlyLanguage() throws {
+        let context = try makeMediaContext()
+        try context.store.saveMetadataItem(
+            MetadataItem(
+                mediaItemID: context.item.id,
+                title: "Existing Title",
+                summary: "Existing Summary",
+                language: "en"
+            )
+        )
+
+        let metadata = try SetMetadataOverrideUseCase(store: context.store).set(
+            mediaItemID: context.item.id,
+            field: .language,
+            value: "ja"
+        )
+
+        XCTAssertEqual(metadata.title, "Existing Title")
+        XCTAssertEqual(metadata.summary, "Existing Summary")
+        XCTAssertEqual(metadata.language, "ja")
+        XCTAssertFalse(metadata.titleOverrideLocked)
+        XCTAssertFalse(metadata.summaryOverrideLocked)
+        XCTAssertTrue(metadata.languageOverrideLocked)
+    }
+
+    func testSetOverrideStoresEmptyStringAsProvided() throws {
+        let context = try makeMediaContext()
+
+        let metadata = try SetMetadataOverrideUseCase(store: context.store).set(
+            mediaItemID: context.item.id,
+            field: .title,
+            value: ""
+        )
+
+        XCTAssertEqual(metadata.title, "")
+        XCTAssertEqual(
+            try context.store.fetchMetadataItem(mediaItemID: context.item.id)?.title,
+            ""
+        )
+    }
+
+    func testClearOverrideUnlocksOnlySelectedFieldKeepsValueAndUpdatesTimestamp() throws {
+        let context = try makeMediaContext()
+        let createdAt = Date(timeIntervalSince1970: 100)
+        let updatedAt = Date(timeIntervalSince1970: 200)
+        let now = Date(timeIntervalSince1970: 1_000)
+        try context.store.saveMetadataItem(
+            MetadataItem(
+                id: "clear-override-metadata",
+                mediaItemID: context.item.id,
+                title: "Manual Title",
+                summary: "Manual Summary",
+                language: "de",
+                titleOverrideLocked: true,
+                summaryOverrideLocked: true,
+                languageOverrideLocked: true,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
+        )
+
+        let metadata = try XCTUnwrap(
+            ClearMetadataOverrideUseCase(
+                store: context.store,
+                now: { now }
+            ).clear(
+                mediaItemID: context.item.id,
+                field: .summary
+            )
+        )
+
+        XCTAssertEqual(metadata.id, "clear-override-metadata")
+        XCTAssertEqual(metadata.title, "Manual Title")
+        XCTAssertEqual(metadata.summary, "Manual Summary")
+        XCTAssertEqual(metadata.language, "de")
+        XCTAssertTrue(metadata.titleOverrideLocked)
+        XCTAssertFalse(metadata.summaryOverrideLocked)
+        XCTAssertTrue(metadata.languageOverrideLocked)
+        XCTAssertEqual(metadata.createdAt, createdAt)
+        XCTAssertEqual(metadata.updatedAt, now)
+    }
+
+    func testClearOverrideDoesNotCreateMetadataItemWhenMissing() throws {
+        let context = try makeMediaContext()
+
+        let metadata = try ClearMetadataOverrideUseCase(store: context.store).clear(
+            mediaItemID: context.item.id,
+            field: .title
+        )
+
+        XCTAssertNil(metadata)
+        XCTAssertNil(try context.store.fetchMetadataItem(mediaItemID: context.item.id))
+    }
+
+    func testSetOverrideDoesNotAlterSourceRecord() throws {
+        let context = try makeMediaContext()
+        let source = try sourceRecord(
+            id: "override-source-existing",
+            mediaItemID: context.item.id,
+            providerID: "movie:550",
+            confidence: 0.77,
+            matchSource: .manual,
+            manualMatchLocked: true,
+            rawPayloadJSON: #"{"source":true}"#
+        )
+        try context.store.saveMetadataSourceRecord(source)
+
+        _ = try SetMetadataOverrideUseCase(store: context.store).set(
+            mediaItemID: context.item.id,
+            field: .title,
+            value: "Manual Title"
+        )
+
+        XCTAssertEqual(
+            try context.store.fetchMetadataSourceRecord(
+                mediaItemID: context.item.id,
+                provider: .tmdb
+            ),
+            source
+        )
+    }
+
+    func testSelectPosterVerifiesOwnershipAndLeavesOtherMediaItemPostersUntouched() throws {
+        let context = try makeMediaContext()
+        let otherItem = MediaItem(mediaType: .movie, title: "Moon", year: 2009)
+        let first = try posterAsset(
+            id: "poster-owned-first",
+            mediaItemID: context.item.id,
+            remotePath: "/owned-first.jpg",
+            isSelected: true
+        )
+        let second = try posterAsset(
+            id: "poster-owned-second",
+            mediaItemID: context.item.id,
+            remotePath: "/owned-second.jpg"
+        )
+        let other = try posterAsset(
+            id: "poster-other-selected",
+            mediaItemID: otherItem.id,
+            remotePath: "/other-selected.jpg",
+            isSelected: true,
+            selectionSource: .automatic
+        )
+        try context.store.saveMediaItem(otherItem)
+        try context.store.savePosterAsset(first)
+        try context.store.savePosterAsset(second)
+        try context.store.savePosterAsset(other)
+
+        try SelectPosterAssetUseCase(store: context.store).select(
+            mediaItemID: context.item.id,
+            posterAssetID: second.id
+        )
+
+        let ownedPosters = try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+        XCTAssertFalse(try XCTUnwrap(ownedPosters.first { $0.id == first.id }).isSelected)
+        let selected = try XCTUnwrap(ownedPosters.first { $0.id == second.id })
+        XCTAssertTrue(selected.isSelected)
+        XCTAssertEqual(selected.selectionSource, .manual)
+        XCTAssertEqual(ownedPosters.count, 2)
+
+        let otherPosters = try context.store.fetchPosterAssets(mediaItemID: otherItem.id)
+        let otherSelected = try XCTUnwrap(otherPosters.first { $0.id == other.id })
+        XCTAssertTrue(otherSelected.isSelected)
+        XCTAssertEqual(otherSelected.selectionSource, .automatic)
+    }
+
+    func testSelectPosterSetsManualSelectionAndUnselectsPreviousPoster() throws {
+        let context = try makeMediaContext()
+        let first = try posterAsset(
+            id: "poster-select-first",
+            mediaItemID: context.item.id,
+            remotePath: "/select-first.jpg",
+            isSelected: true,
+            selectionSource: .automatic
+        )
+        let second = try posterAsset(
+            id: "poster-select-second",
+            mediaItemID: context.item.id,
+            remotePath: "/select-second.jpg"
+        )
+        try context.store.savePosterAsset(first)
+        try context.store.savePosterAsset(second)
+
+        try SelectPosterAssetUseCase(store: context.store).select(
+            mediaItemID: context.item.id,
+            posterAssetID: second.id
+        )
+
+        let posters = try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+        XCTAssertEqual(posters.count, 2)
+        XCTAssertFalse(try XCTUnwrap(posters.first { $0.id == first.id }).isSelected)
+        let selected = try XCTUnwrap(posters.first { $0.id == second.id })
+        XCTAssertTrue(selected.isSelected)
+        XCTAssertEqual(selected.selectionSource, .manual)
+        XCTAssertNil(selected.localCachePath)
+        XCTAssertNil(selected.cachedAt)
+    }
+
+    func testInvalidPosterMediaItemMismatchThrowsClearError() throws {
+        let context = try makeMediaContext()
+        let otherItem = MediaItem(mediaType: .movie, title: "Moon", year: 2009)
+        let otherPoster = try posterAsset(
+            id: "poster-mismatched",
+            mediaItemID: otherItem.id,
+            remotePath: "/mismatched.jpg"
+        )
+        try context.store.saveMediaItem(otherItem)
+        try context.store.savePosterAsset(otherPoster)
+
+        do {
+            try SelectPosterAssetUseCase(store: context.store).select(
+                mediaItemID: context.item.id,
+                posterAssetID: otherPoster.id
+            )
+            XCTFail("Expected posterAssetMediaItemMismatch.")
+        } catch let error as ApplicationMetadataError {
+            XCTAssertEqual(
+                error,
+                .posterAssetMediaItemMismatch(
+                    mediaItemID: context.item.id,
+                    posterAssetID: otherPoster.id
+                )
+            )
+        } catch {
+            XCTFail("Expected posterAssetMediaItemMismatch, got \(error).")
+        }
+
+        let posters = try context.store.fetchPosterAssets(mediaItemID: otherItem.id)
+        XCTAssertFalse(try XCTUnwrap(posters.first { $0.id == otherPoster.id }).isSelected)
+    }
+
+    func testOverrideAndPosterSelectionDoNotModifyPlaybackHistory() throws {
+        let context = try makeMediaContext()
+        let history = PlaybackHistory(
+            id: "override-history-existing",
+            mediaItemID: context.item.id,
+            mediaFileID: context.file.id,
+            positionMS: 42_000,
+            durationMS: 120_000,
+            completed: false,
+            playCount: 3,
+            lastPlayedAt: Date(timeIntervalSince1970: 500),
+            createdAt: Date(timeIntervalSince1970: 500),
+            updatedAt: Date(timeIntervalSince1970: 500)
+        )
+        let first = try posterAsset(
+            id: "poster-history-first",
+            mediaItemID: context.item.id,
+            remotePath: "/history-first.jpg",
+            isSelected: true
+        )
+        let second = try posterAsset(
+            id: "poster-history-second",
+            mediaItemID: context.item.id,
+            remotePath: "/history-second.jpg"
+        )
+        try context.store.savePlaybackHistory(history)
+        try context.store.savePosterAsset(first)
+        try context.store.savePosterAsset(second)
+
+        _ = try SetMetadataOverrideUseCase(store: context.store).set(
+            mediaItemID: context.item.id,
+            field: .title,
+            value: "Manual Title"
+        )
+        _ = try ClearMetadataOverrideUseCase(store: context.store).clear(
+            mediaItemID: context.item.id,
+            field: .title
+        )
+        try SelectPosterAssetUseCase(store: context.store).select(
+            mediaItemID: context.item.id,
+            posterAssetID: second.id
+        )
+
+        XCTAssertEqual(
+            try context.store.fetchPlaybackHistory(
+                mediaItemID: context.item.id,
+                mediaFileID: context.file.id
+            ),
+            history
+        )
+    }
+
     private func makeMediaContext(
         item: MediaItem = MediaItem(mediaType: .movie, title: "Arrival", year: 2016)
     ) throws -> MetadataTestContext {
