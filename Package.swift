@@ -8,6 +8,7 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .library(name: "AppUI", targets: ["AppUI"]),
         .library(name: "Shared", targets: ["Shared"]),
         .library(name: "Domain", targets: ["Domain"]),
         .library(name: "Persistence", targets: ["Persistence"]),
@@ -22,6 +23,10 @@ let package = Package(
         .executable(name: "CineMindMetadataShell", targets: ["CineMindMetadataShell"])
     ],
     targets: [
+        .target(
+            name: "AppUI",
+            dependencies: ["Application", "Domain", "Shared"]
+        ),
         .target(name: "Shared"),
         .target(
             name: "Domain",
