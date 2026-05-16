@@ -1,11 +1,15 @@
+import AppUI
+import Application
 import Foundation
 import Persistence
 
 enum CineMindAppEnvironmentFactory {
-    static func start() throws {
+    static func start() throws -> AppShellEnvironment {
         let databaseURL = try databaseURL()
         let store = try CineMindStore(path: databaseURL.path)
         _ = try store.ensureLibrary(name: "CineMind Library")
+        let mediaSummaryBrowser = LibraryMediaSummaryUseCase(store: store)
+        return AppShellEnvironment(mediaSummaryBrowser: mediaSummaryBrowser)
     }
 
     private static func databaseURL() throws -> URL {

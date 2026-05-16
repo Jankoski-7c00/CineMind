@@ -22,8 +22,8 @@ struct CineMindApp: App {
         viewModel.markLoading()
 
         do {
-            try CineMindAppEnvironmentFactory.start()
-            viewModel.markReady()
+            let environment = try CineMindAppEnvironmentFactory.start()
+            viewModel.markReady(environment: environment)
         } catch {
             viewModel.markFailed(
                 CineMindAppEnvironmentFactory.startupFailureMessage(for: error)
