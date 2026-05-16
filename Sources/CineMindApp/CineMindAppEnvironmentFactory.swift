@@ -9,7 +9,11 @@ enum CineMindAppEnvironmentFactory {
         let store = try CineMindStore(path: databaseURL.path)
         _ = try store.ensureLibrary(name: "CineMind Library")
         let mediaSummaryBrowser = LibraryMediaSummaryUseCase(store: store)
-        return AppShellEnvironment(mediaSummaryBrowser: mediaSummaryBrowser)
+        let itemDetailBrowser = LibraryItemDetailUseCase(store: store)
+        return AppShellEnvironment(
+            mediaSummaryBrowser: mediaSummaryBrowser,
+            itemDetailBrowser: itemDetailBrowser
+        )
     }
 
     private static func databaseURL() throws -> URL {

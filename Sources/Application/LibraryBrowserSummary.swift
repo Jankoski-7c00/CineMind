@@ -62,14 +62,14 @@ public struct LibraryMediaSummarySnapshot: Sendable, Equatable {
     }
 }
 
-public protocol LibraryMediaSummaryBrowsing {
+public protocol LibraryMediaSummaryBrowsing: Sendable {
     func browse(
         section: LibraryBrowserSection,
         page: LibraryBrowserPage
     ) async throws -> LibraryMediaSummarySnapshot
 }
 
-public protocol ApplicationLibraryMediaSummaryStore {
+public protocol ApplicationLibraryMediaSummaryStore: Sendable {
     func fetchMediaItemSummaries(
         mediaType: MediaType?,
         limit: Int,
@@ -77,9 +77,15 @@ public protocol ApplicationLibraryMediaSummaryStore {
     ) throws -> [PersistedMediaItemSummary]
 }
 
+extension CineMindStore: @unchecked Sendable {
+    // CineMindStore is a final class backed by SQLite (serialized via WAL).
+    // All Application use cases dispatch store access through a serial
+    // DispatchQueue, so cross-queue access is safe.
+}
+
 extension CineMindStore: ApplicationLibraryMediaSummaryStore {}
 
-public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, @unchecked Sendable {
+public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable {
     private let store: any ApplicationLibraryMediaSummaryStore
     private let queue: DispatchQueue
     private let lastPlayedLabel: @Sendable (Date) -> String

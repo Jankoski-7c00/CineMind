@@ -58,11 +58,14 @@ public struct CineMindRootView: View {
 fileprivate struct ReadyShellView: View {
     let environment: AppShellEnvironment
     @StateObject private var browserViewModel: LibraryBrowserViewModel
+    @StateObject private var detailViewModel: LibraryItemDetailViewModel
 
     init(environment: AppShellEnvironment) {
         self.environment = environment
         _browserViewModel = StateObject(wrappedValue:
             LibraryBrowserViewModel(mediaSummaryBrowser: environment.mediaSummaryBrowser))
+        _detailViewModel = StateObject(wrappedValue:
+            LibraryItemDetailViewModel(detailBrowser: environment.itemDetailBrowser))
     }
 
     var body: some View {
@@ -71,8 +74,10 @@ fileprivate struct ReadyShellView: View {
         } content: {
             LibraryBrowserView(viewModel: browserViewModel)
         } detail: {
-            Text("Detail")
-                .foregroundColor(.secondary)
+            LibraryItemDetailView(viewModel: detailViewModel)
+                .onChange(of: browserViewModel.selectedItemID) { _, newID in
+                    Task { await detailViewModel.loadDetail(for: newID) }
+                }
         }
     }
 }

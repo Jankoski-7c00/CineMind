@@ -10,7 +10,7 @@ public final class LibraryBrowserViewModel: ObservableObject {
     @Published public private(set) var errorMessage: String?
     @Published public var selectedItemID: MediaItemID?
 
-    private nonisolated(unsafe) let mediaSummaryBrowser: any LibraryMediaSummaryBrowsing
+    private let mediaSummaryBrowser: any LibraryMediaSummaryBrowsing
 
     public init(mediaSummaryBrowser: any LibraryMediaSummaryBrowsing) {
         self.mediaSummaryBrowser = mediaSummaryBrowser
