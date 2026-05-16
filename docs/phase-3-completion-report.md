@@ -331,6 +331,9 @@ Deferred beyond Phase 3:
 
 Phase 3 can be considered complete based on the final review result and passing test suite.
 
+The reviewed Phase 4 roadmap and Phase 4.1 implementation scope are now captured in
+`docs/phase-4-library-ui-mvp.md`.
+
 Recommended Phase 4 direction:
 
 - Build the first polished app-facing library and metadata workflow on top of the completed Phase 1-3 foundations.
