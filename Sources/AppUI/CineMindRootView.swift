@@ -49,3 +49,19 @@ public struct CineMindRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+#Preview("Loading") {
+    CineMindRootView(viewModel: AppShellViewModel(state: .loading))
+}
+
+#Preview("Ready") {
+    CineMindRootView(viewModel: AppShellViewModel(state: .ready))
+}
+
+#Preview("Failed") {
+    CineMindRootView(
+        viewModel: AppShellViewModel(
+            state: .failed("CineMind could not open its local library database.")
+        )
+    )
+}

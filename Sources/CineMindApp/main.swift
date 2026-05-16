@@ -19,7 +19,16 @@ struct CineMindApp: App {
             return
         }
 
-        viewModel.state = CineMindAppEnvironmentFactory.startupState()
+        viewModel.markLoading()
+
+        do {
+            try CineMindAppEnvironmentFactory.start()
+            viewModel.markReady()
+        } catch {
+            viewModel.markFailed(
+                CineMindAppEnvironmentFactory.startupFailureMessage(for: error)
+            )
+        }
     }
 }
 

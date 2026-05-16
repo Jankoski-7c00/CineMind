@@ -1,18 +1,8 @@
-import AppUI
 import Foundation
 import Persistence
 
 enum CineMindAppEnvironmentFactory {
-    static func startupState() -> AppShellState {
-        do {
-            try start()
-            return .ready
-        } catch {
-            return .failed(startupFailureMessage(for: error))
-        }
-    }
-
-    private static func start() throws {
+    static func start() throws {
         let databaseURL = try databaseURL()
         let store = try CineMindStore(path: databaseURL.path)
         _ = try store.ensureLibrary(name: "CineMind Library")
@@ -42,7 +32,7 @@ enum CineMindAppEnvironmentFactory {
         )
     }
 
-    private static func startupFailureMessage(for error: Error) -> String {
+    static func startupFailureMessage(for error: Error) -> String {
         switch error {
         case StartupError.applicationSupportDirectoryUnavailable:
             return "CineMind could not locate your Application Support folder."
@@ -51,7 +41,7 @@ enum CineMindAppEnvironmentFactory {
         case let persistenceError as PersistenceError:
             return persistenceFailureMessage(for: persistenceError)
         default:
-            return "CineMind could not start its local library. \(error.localizedDescription)"
+            return "CineMind could not start its local library."
         }
     }
 
