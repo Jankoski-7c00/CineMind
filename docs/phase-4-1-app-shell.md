@@ -496,6 +496,12 @@ The error state can be exercised through any of:
 
 **Goal:** Confirm every acceptance criterion is met. This is a verification gate, not a code task.
 
+**Completion note - 2026-05-17:**
+
+Phase 4.1 implementation is complete. `AppUI` and `CineMindApp` targets were added, AppUI dependency boundaries were verified, and CineMindApp Phase 4.1-only forbidden imports were verified. Application Support database path creation is owned by CineMindApp only, `CineMindStore` startup and `ensureLibrary` succeed, the `NavigationSplitView` shell renders, and loading/ready/error state plumbing exists.
+
+Existing shell/spike targets still build. `swift build` passed. `swift test` passed with 215 tests. No regressions were found.
+
 **Checklist:**
 
 - [ ] `AppUI` library target exists and builds.
