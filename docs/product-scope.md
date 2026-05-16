@@ -1,4 +1,4 @@
-# PRODUCT_SCOPE.md
+# Product Scope
 
 ## Project: CineMind
 

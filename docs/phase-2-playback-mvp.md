@@ -1,6 +1,6 @@
 # Phase 2 Playback MVP
 
-Canonical file: `docs/phase_2_playback_mvp_document.md`
+Canonical file: `docs/phase-2-playback-mvp.md`
 
 ## Phase 2: Playback MVP
 
@@ -9,10 +9,10 @@ This document defines the second development phase of CineMind.
 Phase 2 introduces local video playback using libmpv while preserving the architectural constraints established in:
 
 - `CLAUDE.md`
-- `docs/PRODUCT_SCOPE.md`
-- `docs/ARCHITECTURE.md`
-- `docs/PHASE_1_LIBRARY_CORE.md`
-- `docs/PHASE_1_COMPLETION_REPORT.md`
+- `docs/product-scope.md`
+- `docs/architecture.md`
+- `docs/phase-1-library-core.md`
+- `docs/phase-1-completion-report.md`
 
 Phase 2 builds on the completed Phase 1 Library Core foundation.
 
@@ -899,7 +899,7 @@ Equivalent callback-based delivery is acceptable if it preserves:
 Update:
 
 ```text
-docs/phase_2_playback_mvp_document.md
+docs/phase-2-playback-mvp.md
 ```
 
 This document is the implementation contract for Phase 2.

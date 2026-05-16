@@ -1,18 +1,18 @@
 # Phase 3 Metadata MVP
 
-Canonical file: `docs/PHASE_3_METADATA_MVP.md`
+Canonical file: `docs/phase-3-metadata-mvp.md`
 
 This document defines Phase 3 of CineMind: a narrow metadata MVP using TMDB as the only provider.
 
 Phase 3 is constrained by:
 
 - `CLAUDE.md`
-- `docs/PRODUCT_SCOPE.md`
-- `docs/ARCHITECTURE.md`
-- `docs/PHASE_1_LIBRARY_CORE.md`
-- `docs/PHASE_1_COMPLETION_REPORT.md`
-- `docs/phase_2_playback_mvp_document.md`
-- `docs/PHASE_2_COMPLETION_REPORT.md`
+- `docs/product-scope.md`
+- `docs/architecture.md`
+- `docs/phase-1-library-core.md`
+- `docs/phase-1-completion-report.md`
+- `docs/phase-2-playback-mvp.md`
+- `docs/phase-2-completion-report.md`
 
 Phase 3 builds on the completed local library, scanner, persistence, application, and playback foundations.
 

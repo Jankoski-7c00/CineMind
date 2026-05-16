@@ -4,7 +4,7 @@ Date: 2026-05-06
 
 ## 1. Implementation Scope
 
-Phase 1 completed the local library core foundation defined in `docs/PHASE_1_LIBRARY_CORE.md`.
+Phase 1 completed the local library core foundation defined in `docs/phase-1-library-core.md`.
 
 Implemented:
 

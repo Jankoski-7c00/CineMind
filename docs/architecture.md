@@ -1,4 +1,4 @@
-# ARCHITECTURE.md
+# Architecture
 
 ## Project: CineMind
 
@@ -9,13 +9,13 @@ This document defines the system architecture, module boundaries, data model, da
 It must be read together with:
 
 - `CLAUDE.md`
-- `PRODUCT_SCOPE.md`
+- `product-scope.md`
 
 Where documents conflict, the priority order is:
 
 1. `CLAUDE.md`
-2. `PRODUCT_SCOPE.md`
-3. `ARCHITECTURE.md`
+2. `product-scope.md`
+3. `architecture.md`
 
 ---
 

@@ -1,4 +1,4 @@
-# PHASE_1_LIBRARY_CORE.md
+# Phase 1 Library Core
 
 ## Phase 1: Library Core MVP
 
@@ -9,8 +9,8 @@ The goal of this phase is to build a **stable, minimal, local media library core
 This phase is **strictly constrained** by:
 
 - CLAUDE.md
-- docs/PRODUCT_SCOPE.md
-- docs/ARCHITECTURE.md
+- docs/product-scope.md
+- docs/architecture.md
 
 ---
 

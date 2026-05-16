@@ -18,8 +18,8 @@ All project constraints are distributed across multiple documents.
 
 ## Required Documents
 
-/CLAUDE.md ← Global rules (this file) /docs/PRODUCT_SCOPE.md ← What to
-build (feature boundary) /docs/ARCHITECTURE.md ← How to build (system
+/CLAUDE.md ← Global rules (this file) /docs/product-scope.md ← What to
+build (feature boundary) /docs/architecture.md ← How to build (system
 design)
 
 ------------------------------------------------------------------------
@@ -29,15 +29,15 @@ design)
 When documents conflict:
 
 1.  CLAUDE.md
-2.  PRODUCT_SCOPE.md
-3.  ARCHITECTURE.md
+2.  product-scope.md
+3.  architecture.md
 
 ------------------------------------------------------------------------
 
 ## Interpretation Rules
 
--   PRODUCT_SCOPE.md defines feature scope
--   ARCHITECTURE.md defines implementation structure
+-   product-scope.md defines feature scope
+-   architecture.md defines implementation structure
 -   CLAUDE.md defines non-negotiable constraints
 
 ------------------------------------------------------------------------
@@ -91,7 +91,7 @@ Forbidden:
 
 Before implementing:
 
--   Must exist in PRODUCT_SCOPE.md
+-   Must exist in product-scope.md
 -   Must match stage (MVP/Beta)
 
 Reject immediately:
