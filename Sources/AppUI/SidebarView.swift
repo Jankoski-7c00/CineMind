@@ -1,16 +1,21 @@
+import Application
 import SwiftUI
 
 public struct SidebarView: View {
-    public init() {}
+    @Binding var selectedSection: LibraryBrowserSection
+
+    public init(selectedSection: Binding<LibraryBrowserSection>) {
+        self._selectedSection = selectedSection
+    }
 
     public var body: some View {
-        List {
+        List(selection: $selectedSection) {
             Label("Library", systemImage: "books.vertical")
+                .tag(LibraryBrowserSection.library)
             Label("Movies", systemImage: "film")
+                .tag(LibraryBrowserSection.movies)
             Label("TV Episodes", systemImage: "tv")
-            Label("Recently Played", systemImage: "clock")
-            Label("Needs Metadata", systemImage: "exclamationmark.triangle")
-            Label("Folders", systemImage: "folder")
+                .tag(LibraryBrowserSection.tvEpisodes)
         }
     }
 }

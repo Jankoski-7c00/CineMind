@@ -22,15 +22,20 @@ public struct CineMindRootView: View {
         ProgressView("Loading Library...")
     }
 
+    @ViewBuilder
     private var shellView: some View {
-        NavigationSplitView {
-            SidebarView()
-        } content: {
-            Text("Select an item")
-                .foregroundColor(.secondary)
-        } detail: {
-            Text("Detail")
-                .foregroundColor(.secondary)
+        if let environment = viewModel.environment {
+            ReadyShellView(environment: environment)
+        } else {
+            NavigationSplitView {
+                SidebarView(selectedSection: .constant(.library))
+            } content: {
+                Text("Select an item")
+                    .foregroundColor(.secondary)
+            } detail: {
+                Text("Detail")
+                    .foregroundColor(.secondary)
+            }
         }
     }
 
@@ -47,6 +52,28 @@ public struct CineMindRootView: View {
                 .padding(.horizontal)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+fileprivate struct ReadyShellView: View {
+    let environment: AppShellEnvironment
+    @StateObject private var browserViewModel: LibraryBrowserViewModel
+
+    init(environment: AppShellEnvironment) {
+        self.environment = environment
+        _browserViewModel = StateObject(wrappedValue:
+            LibraryBrowserViewModel(mediaSummaryBrowser: environment.mediaSummaryBrowser))
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            SidebarView(selectedSection: $browserViewModel.selectedSection)
+        } content: {
+            LibraryBrowserView(viewModel: browserViewModel)
+        } detail: {
+            Text("Detail")
+                .foregroundColor(.secondary)
+        }
     }
 }
 
