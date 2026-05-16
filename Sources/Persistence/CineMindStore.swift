@@ -22,6 +22,18 @@ public final class CineMindStore {
     }
 }
 
+// MARK: - Internal Query Support
+
+extension CineMindStore {
+    internal func preparePersistenceQuery(_ sql: String) throws -> SQLiteStatement {
+        try connection.prepare(sql)
+    }
+
+    internal func decodePersistenceDate(_ timestamp: Double?) -> Date? {
+        date(timestamp)
+    }
+}
+
 // MARK: - Migration Diagnostics
 
 extension CineMindStore {

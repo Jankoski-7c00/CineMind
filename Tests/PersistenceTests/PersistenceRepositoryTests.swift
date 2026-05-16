@@ -1297,6 +1297,250 @@ final class PersistenceRepositoryTests: XCTestCase {
         }
     }
 
+    func testFetchMediaItemSummariesReturnsAllItemsWithAggregatesAndMetadata() throws {
+        let store = try makeStore()
+        let library = try store.createOrLoadLibrary()
+        let availableFolder = LibraryFolder(
+            id: "summary-folder-available",
+            libraryID: library.id,
+            displayName: "Movies",
+            rootPath: "/media/movies"
+        )
+        let unavailableFolder = LibraryFolder(
+            id: "summary-folder-unavailable",
+            libraryID: library.id,
+            displayName: "Offline",
+            rootPath: "/media/offline",
+            isAvailable: false
+        )
+        let arrival = MediaItem(
+            id: "summary-arrival",
+            mediaType: .movie,
+            title: "Arrival",
+            year: 2016
+        )
+        let moon = MediaItem(
+            id: "summary-moon",
+            mediaType: .movie,
+            title: "Moon",
+            year: 2009
+        )
+        let episode = MediaItem(
+            id: "summary-episode",
+            mediaType: .episode,
+            title: "Zeta Episode",
+            episodeInfo: EpisodeInfo(
+                seriesTitle: "The Show",
+                seasonNumber: 1,
+                episodeNumber: 2,
+                episodeTitle: "Pilot"
+            )
+        )
+        try store.addLibraryFolder(availableFolder)
+        try store.addLibraryFolder(unavailableFolder)
+        try store.saveMediaItem(arrival)
+        try store.saveMediaItem(moon)
+        try store.saveMediaItem(episode)
+
+        let availableFile = mediaFile(
+            itemID: arrival.id,
+            folderID: availableFolder.id,
+            relativePath: "Arrival (2016).mkv",
+            absolutePathHash: "arrival-available-hash",
+            fileSizeBytes: 1024,
+            isAvailable: true
+        )
+        let unavailableFile = mediaFile(
+            itemID: arrival.id,
+            folderID: availableFolder.id,
+            relativePath: "Arrival (2016) Missing.mkv",
+            absolutePathHash: "arrival-unavailable-hash",
+            fileSizeBytes: 2048,
+            isAvailable: false
+        )
+        let unavailableFolderFile = mediaFile(
+            itemID: arrival.id,
+            folderID: unavailableFolder.id,
+            relativePath: "Arrival (2016) Offline.mkv",
+            absolutePathHash: "arrival-offline-hash",
+            fileSizeBytes: 4096,
+            isAvailable: true
+        )
+        let episodeFile = mediaFile(
+            itemID: episode.id,
+            folderID: availableFolder.id,
+            relativePath: "The Show/S01E02.mkv",
+            absolutePathHash: "episode-hash",
+            fileSizeBytes: 512,
+            isAvailable: true
+        )
+        try store.saveMediaFile(availableFile)
+        try store.saveMediaFile(unavailableFile)
+        try store.saveMediaFile(unavailableFolderFile)
+        try store.saveMediaFile(episodeFile)
+
+        let olderPlayedAt = Date(timeIntervalSince1970: 1_000)
+        let newerPlayedAt = Date(timeIntervalSince1970: 3_000)
+        try store.savePlaybackProgress(
+            mediaItemID: arrival.id,
+            mediaFileID: availableFile.id,
+            positionMS: 1_000,
+            durationMS: nil,
+            completed: false,
+            playedAt: olderPlayedAt
+        )
+        try store.savePlaybackProgress(
+            mediaItemID: arrival.id,
+            mediaFileID: unavailableFile.id,
+            positionMS: 2_000,
+            durationMS: nil,
+            completed: false,
+            playedAt: newerPlayedAt
+        )
+        try store.saveMetadataItem(MetadataItem(mediaItemID: arrival.id, title: "Arrival"))
+        try store.saveMetadataSourceRecord(
+            try MetadataSourceRecord.validated(
+                mediaItemID: arrival.id,
+                provider: .tmdb,
+                providerID: "movie:arrival",
+                providerMediaType: .movie,
+                confidence: 1.0,
+                matchSource: .automatic
+            )
+        )
+
+        let summaries = try store.fetchMediaItemSummaries(mediaType: nil, limit: 10)
+
+        XCTAssertEqual(summaries.map(\.id), [arrival.id, moon.id, episode.id])
+        XCTAssertEqual(summaries.filter { $0.id == arrival.id }.count, 1)
+
+        let arrivalSummary = try XCTUnwrap(summaries.first { $0.id == arrival.id })
+        XCTAssertEqual(arrivalSummary.mediaType, .movie)
+        XCTAssertEqual(arrivalSummary.title, "Arrival")
+        XCTAssertEqual(arrivalSummary.year, 2016)
+        XCTAssertNil(arrivalSummary.seriesTitle)
+        XCTAssertEqual(arrivalSummary.totalFileCount, 3)
+        XCTAssertEqual(arrivalSummary.availableFileCount, 1)
+        XCTAssertEqual(arrivalSummary.unavailableFileCount, 2)
+        XCTAssertTrue(unavailableFolderFile.isAvailable)
+        XCTAssertFalse(unavailableFolder.isAvailable)
+        XCTAssertTrue(arrivalSummary.hasMetadataItem)
+        XCTAssertTrue(arrivalSummary.hasMetadataSourceRecord)
+        XCTAssertEqual(arrivalSummary.latestPlayedAt, newerPlayedAt)
+
+        let moonSummary = try XCTUnwrap(summaries.first { $0.id == moon.id })
+        XCTAssertEqual(moonSummary.totalFileCount, 0)
+        XCTAssertEqual(moonSummary.availableFileCount, 0)
+        XCTAssertEqual(moonSummary.unavailableFileCount, 0)
+        XCTAssertFalse(moonSummary.hasMetadataItem)
+        XCTAssertFalse(moonSummary.hasMetadataSourceRecord)
+        XCTAssertNil(moonSummary.latestPlayedAt)
+
+        let episodeSummary = try XCTUnwrap(summaries.first { $0.id == episode.id })
+        XCTAssertEqual(episodeSummary.mediaType, .episode)
+        XCTAssertEqual(episodeSummary.seriesTitle, "The Show")
+        XCTAssertEqual(episodeSummary.seasonNumber, 1)
+        XCTAssertEqual(episodeSummary.episodeNumber, 2)
+        XCTAssertEqual(episodeSummary.episodeTitle, "Pilot")
+        XCTAssertEqual(episodeSummary.totalFileCount, 1)
+        XCTAssertEqual(episodeSummary.availableFileCount, 1)
+        XCTAssertEqual(episodeSummary.unavailableFileCount, 0)
+    }
+
+    func testFetchMediaItemSummariesFiltersByMediaType() throws {
+        let store = try makeStore()
+        let arrival = MediaItem(
+            id: "summary-filter-arrival",
+            mediaType: .movie,
+            title: "Arrival",
+            year: 2016
+        )
+        let moon = MediaItem(
+            id: "summary-filter-moon",
+            mediaType: .movie,
+            title: "Moon",
+            year: 2009
+        )
+        let episode = MediaItem(
+            id: "summary-filter-episode",
+            mediaType: .episode,
+            title: "Zeta Episode",
+            episodeInfo: EpisodeInfo(
+                seriesTitle: "The Show",
+                seasonNumber: 1,
+                episodeNumber: 1,
+                episodeTitle: "Pilot"
+            )
+        )
+        try store.saveMediaItem(moon)
+        try store.saveMediaItem(episode)
+        try store.saveMediaItem(arrival)
+
+        XCTAssertEqual(
+            try store.fetchMediaItemSummaries(mediaType: .movie, limit: 10).map(\.id),
+            [arrival.id, moon.id]
+        )
+        XCTAssertEqual(
+            try store.fetchMediaItemSummaries(mediaType: .episode, limit: 10).map(\.id),
+            [episode.id]
+        )
+    }
+
+    func testFetchMediaItemSummariesUsesDeterministicTitleAndIDOrdering() throws {
+        let store = try makeStore()
+        let secondTiedTitle = MediaItem(
+            id: "summary-order-b",
+            mediaType: .movie,
+            title: "bravo",
+            year: 2001
+        )
+        let firstTiedTitle = MediaItem(
+            id: "summary-order-a",
+            mediaType: .movie,
+            title: "Bravo",
+            year: 2002
+        )
+        let firstTitle = MediaItem(
+            id: "summary-order-alpha",
+            mediaType: .movie,
+            title: "alpha",
+            year: 2000
+        )
+        try store.saveMediaItem(secondTiedTitle)
+        try store.saveMediaItem(firstTiedTitle)
+        try store.saveMediaItem(firstTitle)
+
+        XCTAssertEqual(
+            try store.fetchMediaItemSummaries(mediaType: nil, limit: 10).map(\.id),
+            [firstTitle.id, firstTiedTitle.id, secondTiedTitle.id]
+        )
+    }
+
+    func testFetchMediaItemSummariesPaginatesAndNormalizesBounds() throws {
+        let store = try makeStore()
+        let first = MediaItem(id: "summary-page-a", mediaType: .movie, title: "A")
+        let second = MediaItem(id: "summary-page-b", mediaType: .movie, title: "B")
+        let third = MediaItem(id: "summary-page-c", mediaType: .movie, title: "C")
+        try store.saveMediaItem(third)
+        try store.saveMediaItem(first)
+        try store.saveMediaItem(second)
+
+        XCTAssertEqual(
+            try store.fetchMediaItemSummaries(mediaType: nil, limit: 2).map(\.id),
+            [first.id, second.id]
+        )
+        XCTAssertEqual(
+            try store.fetchMediaItemSummaries(mediaType: nil, limit: 10, offset: 1).map(\.id),
+            [second.id, third.id]
+        )
+        XCTAssertEqual(try store.fetchMediaItemSummaries(mediaType: nil, limit: 0), [])
+        XCTAssertEqual(try store.fetchMediaItemSummaries(mediaType: nil, limit: -1), [])
+        XCTAssertEqual(
+            try store.fetchMediaItemSummaries(mediaType: nil, limit: 1, offset: -10).map(\.id),
+            [first.id]
+        )
+    }
+
     func testScanRunPersistence() throws {
         let store = try makeStore()
         let library = try store.createOrLoadLibrary()
