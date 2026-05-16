@@ -77,7 +77,7 @@ private enum CineMindMetadataShell {
             print("Match result: manual")
             printSourceRecord(source)
             try printMetadataState(mediaItemID: mediaItemID, store: store)
-        case .refresh(_, let mediaItemID, let cacheRoot):
+        case .refresh(_, let mediaItemID, let force, let cacheRoot):
             let item = try fetchMediaItem(mediaItemID, store: store)
             printMediaItem(item)
 
@@ -87,7 +87,7 @@ private enum CineMindMetadataShell {
                 store: store,
                 provider: context.provider,
                 posterCache: context.posterCache
-            ).refresh(mediaItemID: mediaItemID, language: context.language)
+            ).refresh(mediaItemID: mediaItemID, force: force, language: context.language)
 
             printRefreshResult(result)
             try printMetadataState(mediaItemID: mediaItemID, store: store)
@@ -437,7 +437,6 @@ private enum ShellArguments {
                 for: commandName,
                 providerID: providerID,
                 limit: limit,
-                force: force,
                 value: value,
                 field: field,
                 posterAssetID: posterAssetID
@@ -445,6 +444,7 @@ private enum ShellArguments {
             return .command(.refresh(
                 databasePath: databasePath,
                 mediaItemID: try required(itemID, "--item"),
+                force: force,
                 cacheRoot: cacheRoot
             ))
         case "refresh-all":
@@ -597,7 +597,7 @@ private enum ShellCommand {
     case search(databasePath: String, mediaItemID: MediaItemID)
     case autoMatch(databasePath: String, mediaItemID: MediaItemID, cacheRoot: String?)
     case manualMatch(databasePath: String, mediaItemID: MediaItemID, providerID: String, cacheRoot: String?)
-    case refresh(databasePath: String, mediaItemID: MediaItemID, cacheRoot: String?)
+    case refresh(databasePath: String, mediaItemID: MediaItemID, force: Bool, cacheRoot: String?)
     case refreshAll(databasePath: String, limit: Int, usedDefaultLimit: Bool, force: Bool, cacheRoot: String?)
     case override(databasePath: String, mediaItemID: MediaItemID, field: MetadataOverrideField, value: String)
     case clearOverride(databasePath: String, mediaItemID: MediaItemID, field: MetadataOverrideField)
@@ -609,7 +609,7 @@ private enum ShellCommand {
              .search(let databasePath, _),
              .autoMatch(let databasePath, _, _),
              .manualMatch(let databasePath, _, _, _),
-             .refresh(let databasePath, _, _),
+             .refresh(let databasePath, _, _, _),
              .refreshAll(let databasePath, _, _, _, _),
              .override(let databasePath, _, _, _),
              .clearOverride(let databasePath, _, _),
@@ -732,7 +732,7 @@ private func printUsage() {
       CineMindMetadataShell --db <database-path> search --item <media-item-id>
       CineMindMetadataShell --db <database-path> auto-match --item <media-item-id> [--cache-root <path>]
       CineMindMetadataShell --db <database-path> manual-match --item <media-item-id> --provider-id <provider-id> [--cache-root <path>]
-      CineMindMetadataShell --db <database-path> refresh --item <media-item-id> [--cache-root <path>]
+      CineMindMetadataShell --db <database-path> refresh --item <media-item-id> [--force] [--cache-root <path>]
       CineMindMetadataShell --db <database-path> refresh-all [--limit N] [--force] [--cache-root <path>]
       CineMindMetadataShell --db <database-path> override-title --item <media-item-id> --value <value>
       CineMindMetadataShell --db <database-path> override-summary --item <media-item-id> --value <value>

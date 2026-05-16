@@ -144,7 +144,8 @@ final class MetadataUseCaseTests: XCTestCase {
         let posters = try context.store.fetchPosterAssets(mediaItemID: context.item.id)
         XCTAssertEqual(posters.count, 1)
         XCTAssertEqual(posters[0].remotePath, "/arrival.jpg")
-        XCTAssertFalse(posters[0].isSelected)
+        XCTAssertTrue(posters[0].isSelected)
+        XCTAssertEqual(posters[0].selectionSource, .automatic)
         XCTAssertNil(posters[0].localCachePath)
         XCTAssertNil(posters[0].cachedAt)
     }
@@ -293,7 +294,10 @@ final class MetadataUseCaseTests: XCTestCase {
         XCTAssertEqual(fetched.matchSource, .manual)
         XCTAssertEqual(fetched.confidence, 1.0)
         XCTAssertTrue(fetched.manualMatchLocked)
-        XCTAssertEqual(try context.store.fetchPosterAssets(mediaItemID: context.item.id).count, 1)
+        let posters = try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+        XCTAssertEqual(posters.count, 1)
+        XCTAssertTrue(posters[0].isSelected)
+        XCTAssertEqual(posters[0].selectionSource, .automatic)
     }
 
     func testManualRematchReplacesExistingSourceRecord() async throws {
@@ -546,7 +550,77 @@ final class MetadataUseCaseTests: XCTestCase {
         XCTAssertEqual(source.matchedAt, matchedAt)
         XCTAssertEqual(source.refreshedAt, refreshedAt)
         XCTAssertEqual(source.rawPayloadJSON, #"{"refreshed":true}"#)
-        XCTAssertEqual(try context.store.fetchPosterAssets(mediaItemID: context.item.id).count, 1)
+        let posters = try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+        XCTAssertEqual(posters.count, 1)
+        XCTAssertTrue(posters[0].isSelected)
+        XCTAssertEqual(posters[0].remotePath, "/refreshed.jpg")
+        XCTAssertEqual(posters[0].selectionSource, .automatic)
+    }
+
+    func testForcedRefreshWithSourceUsesExactProviderIDAndDoesNotSearch() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(mediaItemID: context.item.id, providerID: "movie:550")
+        )
+        provider.searchResults = [movieCandidate(id: 551, confidence: 0.99)]
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Forced Exact")
+
+        _ = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(mediaItemID: context.item.id, force: true)
+
+        XCTAssertEqual(provider.searchQueries, [])
+        XCTAssertEqual(provider.detailsRequests.map(\.rawValue), ["movie:550"])
+        XCTAssertEqual(
+            try context.store.fetchMetadataSourceRecord(
+                mediaItemID: context.item.id,
+                provider: .tmdb
+            )?.providerID,
+            "movie:550"
+        )
+    }
+
+    func testRefreshPreservesExistingSelectedPosterWhenProviderStillReturnsIt() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        try context.store.saveMetadataSourceRecord(
+            try sourceRecord(mediaItemID: context.item.id, providerID: "movie:550")
+        )
+        let selectedPoster = try posterAsset(
+            id: "poster-selected-existing",
+            mediaItemID: context.item.id,
+            remotePath: "/selected.jpg",
+            isSelected: true,
+            selectionSource: .manual
+        )
+        let otherPoster = try posterAsset(
+            id: "poster-other-existing",
+            mediaItemID: context.item.id,
+            remotePath: "/other.jpg"
+        )
+        try context.store.savePosterAsset(selectedPoster)
+        try context.store.savePosterAsset(otherPoster)
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Preserve Selected")
+        provider.imagesByID["movie:550"] = [
+            RemoteImage(source: .tmdb, remotePath: "/selected.jpg", preferredCacheSize: "w500"),
+            RemoteImage(source: .tmdb, remotePath: "/new.jpg", preferredCacheSize: "w500")
+        ]
+
+        _ = try await RefreshMetadataUseCase(
+            store: context.store,
+            provider: provider
+        ).refresh(mediaItemID: context.item.id)
+
+        let posters = try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+        let selected = try XCTUnwrap(posters.first { $0.id == selectedPoster.id })
+        let other = try XCTUnwrap(posters.first { $0.id == otherPoster.id })
+        let newPoster = try XCTUnwrap(posters.first { $0.remotePath == "/new.jpg" })
+        XCTAssertTrue(selected.isSelected)
+        XCTAssertEqual(selected.selectionSource, .manual)
+        XCTAssertFalse(other.isSelected)
+        XCTAssertFalse(newPoster.isSelected)
     }
 
     func testRefreshWithManualLockUsesExactProviderIDAndDoesNotSearch() async throws {

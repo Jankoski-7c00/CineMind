@@ -100,6 +100,10 @@ let package = Package(
         .testTarget(
             name: "MetadataTests",
             dependencies: ["Metadata", "Domain"]
+        ),
+        .testTarget(
+            name: "CineMindMetadataShellTests",
+            dependencies: ["CineMindMetadataShell"]
         )
     ]
 )

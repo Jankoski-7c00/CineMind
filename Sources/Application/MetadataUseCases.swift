@@ -250,8 +250,10 @@ public struct RefreshMetadataUseCase {
 
     public func refresh(
         mediaItemID: MediaItemID,
+        force: Bool = false,
         language: String? = nil
     ) async throws -> RefreshMetadataResult {
+        _ = force
         let mediaItem = try fetchMediaItem(mediaItemID)
         guard let source = try store.fetchMetadataSourceRecord(
             mediaItemID: mediaItem.id,
@@ -413,6 +415,7 @@ public struct RefreshLibraryMetadataUseCase {
             do {
                 let itemResult = try await refreshUseCase.refresh(
                     mediaItemID: mediaItem.id,
+                    force: force,
                     language: language
                 )
                 result.record(itemResult)
@@ -808,12 +811,16 @@ private struct MetadataMatchWriter {
                     (PosterIdentity(poster), poster)
                 }
             )
-            for image in images {
+            let shouldAutoSelectPoster = !existingPosters.contains {
+                $0.assetType == .poster && $0.isSelected
+            }
+            for (index, image) in images.enumerated() {
                 let poster = try posterAsset(
                     mediaItemID: mediaItem.id,
                     image: image,
                     existing: posterByIdentity[PosterIdentity(image)],
                     cachedPoster: cachedPoster,
+                    shouldAutoSelect: shouldAutoSelectPoster && index == 0,
                     writtenAt: writtenAt
                 )
                 try store.savePosterAsset(poster)
@@ -941,9 +948,18 @@ private struct MetadataMatchWriter {
         image: RemoteImage,
         existing: PosterAsset?,
         cachedPoster: CachedPoster?,
+        shouldAutoSelect: Bool,
         writtenAt: Date
     ) throws -> PosterAsset {
         let cacheResult = cachedPoster?.result(for: mediaItemID, image: image)
+        let isSelected = existing?.isSelected ?? shouldAutoSelect
+        let selectionSource: PosterSelectionSource
+        if shouldAutoSelect, existing?.isSelected != true {
+            selectionSource = .automatic
+        } else {
+            selectionSource = existing?.selectionSource ?? .automatic
+        }
+
         return try PosterAsset.validated(
             id: existing?.id ?? DomainID.new(),
             mediaItemID: mediaItemID,
@@ -955,8 +971,8 @@ private struct MetadataMatchWriter {
             preferredCacheSize: image.preferredCacheSize,
             localCachePath: cacheResult?.localPath ?? existing?.localCachePath,
             cachedAt: cacheResult?.cachedAt ?? existing?.cachedAt,
-            isSelected: existing?.isSelected ?? false,
-            selectionSource: existing?.selectionSource ?? .automatic,
+            isSelected: isSelected,
+            selectionSource: selectionSource,
             createdAt: existing?.createdAt ?? writtenAt,
             updatedAt: writtenAt
         )
