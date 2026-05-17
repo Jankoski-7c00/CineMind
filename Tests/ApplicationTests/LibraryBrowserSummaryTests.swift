@@ -13,7 +13,50 @@ final class LibraryBrowserSummaryTests: XCTestCase {
         _ = try await useCase.browse(section: .movies, page: LibraryBrowserPage(limit: 10))
         _ = try await useCase.browse(section: .tvEpisodes, page: LibraryBrowserPage(limit: 10))
 
-        XCTAssertEqual(store.calls.map(\.mediaType), [nil, .movie, .episode])
+        XCTAssertEqual(
+            store.calls,
+            [
+                .media(mediaType: nil, limit: 10, offset: 0),
+                .media(mediaType: .movie, limit: 10, offset: 0),
+                .media(mediaType: .episode, limit: 10, offset: 0)
+            ]
+        )
+    }
+
+    func testSectionMappingRecentlyPlayedAndNeedsMetadata() async throws {
+        let store = RecordingLibraryMediaSummaryStore()
+        let useCase = LibraryMediaSummaryUseCase(store: store)
+
+        _ = try await useCase.browse(section: .recentlyPlayed, page: LibraryBrowserPage(limit: 10))
+        _ = try await useCase.browse(
+            section: .needsMetadata,
+            page: LibraryBrowserPage(limit: 5, offset: 2)
+        )
+
+        XCTAssertEqual(
+            store.calls,
+            [
+                .recentlyPlayed(limit: 10, offset: 0),
+                .needsMetadata(limit: 5, offset: 2)
+            ]
+        )
+    }
+
+    func testFoldersSectionThrowsUnsupportedMediaSectionWithoutStoreCall() async throws {
+        let store = RecordingLibraryMediaSummaryStore()
+        let useCase = LibraryMediaSummaryUseCase(store: store)
+
+        do {
+            _ = try await useCase.browse(section: .folders, page: LibraryBrowserPage(limit: 10))
+            XCTFail("Expected folders to be unsupported by the media summary use case")
+        } catch {
+            XCTAssertEqual(
+                error as? LibraryBrowserError,
+                .unsupportedMediaSection(.folders)
+            )
+        }
+
+        XCTAssertEqual(store.calls, [])
     }
 
     func testLimitLessThanOrEqualToZeroReturnsEmptySnapshotWithoutStoreCall() async throws {
@@ -61,10 +104,36 @@ final class LibraryBrowserSummaryTests: XCTestCase {
             page: LibraryBrowserPage(limit: 20, offset: -5)
         )
 
-        XCTAssertEqual(store.calls, [StoreCall(mediaType: nil, limit: 20, offset: 0)])
+        XCTAssertEqual(store.calls, [.media(mediaType: nil, limit: 20, offset: 0)])
         XCTAssertEqual(snapshot.section, .library)
         XCTAssertEqual(snapshot.page, LibraryBrowserPage(limit: 20, offset: 0))
         XCTAssertEqual(snapshot.items.map(\.id), ["arrival"])
+    }
+
+    func testNegativeOffsetIsNormalizedForExtraMediaSections() async throws {
+        let store = RecordingLibraryMediaSummaryStore(
+            summaries: [
+                makeSummary(id: "arrival", mediaType: .movie, title: "Arrival")
+            ]
+        )
+        let useCase = LibraryMediaSummaryUseCase(store: store)
+
+        _ = try await useCase.browse(
+            section: .recentlyPlayed,
+            page: LibraryBrowserPage(limit: 20, offset: -5)
+        )
+        _ = try await useCase.browse(
+            section: .needsMetadata,
+            page: LibraryBrowserPage(limit: 20, offset: -10)
+        )
+
+        XCTAssertEqual(
+            store.calls,
+            [
+                .recentlyPlayed(limit: 20, offset: 0),
+                .needsMetadata(limit: 20, offset: 0)
+            ]
+        )
     }
 
     func testMovieTitleAndYearLabels() async throws {
@@ -379,10 +448,28 @@ private final class RecordingLibraryMediaSummaryStore: ApplicationLibraryMediaSu
         limit: Int,
         offset: Int
     ) throws -> [PersistedMediaItemSummary] {
+        fetchSummaries(recording: .media(mediaType: mediaType, limit: limit, offset: offset))
+    }
+
+    func fetchRecentlyPlayedMediaItemSummaries(
+        limit: Int,
+        offset: Int
+    ) throws -> [PersistedMediaItemSummary] {
+        fetchSummaries(recording: .recentlyPlayed(limit: limit, offset: offset))
+    }
+
+    func fetchMediaItemSummariesNeedingMetadata(
+        limit: Int,
+        offset: Int
+    ) throws -> [PersistedMediaItemSummary] {
+        fetchSummaries(recording: .needsMetadata(limit: limit, offset: offset))
+    }
+
+    private func fetchSummaries(recording call: StoreCall) -> [PersistedMediaItemSummary] {
         lock.withLock {
             activeCalls += 1
             recordedMaxConcurrentCalls = max(recordedMaxConcurrentCalls, activeCalls)
-            recordedCalls.append(StoreCall(mediaType: mediaType, limit: limit, offset: offset))
+            recordedCalls.append(call)
         }
 
         if callDelay > 0 {
@@ -396,10 +483,10 @@ private final class RecordingLibraryMediaSummaryStore: ApplicationLibraryMediaSu
     }
 }
 
-private struct StoreCall: Equatable {
-    let mediaType: MediaType?
-    let limit: Int
-    let offset: Int
+private enum StoreCall: Equatable {
+    case media(mediaType: MediaType?, limit: Int, offset: Int)
+    case recentlyPlayed(limit: Int, offset: Int)
+    case needsMetadata(limit: Int, offset: Int)
 }
 
 private func makeSummary(

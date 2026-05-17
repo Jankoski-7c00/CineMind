@@ -16,8 +16,12 @@ public struct LibraryBrowserView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let errorMessage = viewModel.errorMessage {
                 errorContent(message: errorMessage)
+            } else if viewModel.selectedSection == .folders,
+                      let folderSnapshot = viewModel.folderSnapshot,
+                      !folderSnapshot.folders.isEmpty {
+                folderTableContent(folders: folderSnapshot.folders)
             } else if let snapshot = viewModel.snapshot, !snapshot.items.isEmpty {
-                tableContent(items: snapshot.items)
+                mediaTableContent(items: snapshot.items)
             } else {
                 emptyContent
             }
@@ -28,7 +32,7 @@ public struct LibraryBrowserView: View {
     }
 
     private var emptyContent: some View {
-        Text("No media found")
+        Text(viewModel.selectedSection == .folders ? "No folders found" : "No media found")
             .foregroundColor(.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -47,7 +51,7 @@ public struct LibraryBrowserView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func tableContent(items: [LibraryItemSummary]) -> some View {
+    private func mediaTableContent(items: [LibraryItemSummary]) -> some View {
         Table(of: LibraryItemSummary.self, selection: $viewModel.selectedItemID) {
             TableColumn("Title") { item in
                 Text(item.displayTitle)
@@ -70,6 +74,33 @@ public struct LibraryBrowserView: View {
         } rows: {
             ForEach(items) { item in
                 TableRow(item)
+            }
+        }
+    }
+
+    private func folderTableContent(folders: [LibraryFolderSummary]) -> some View {
+        Table(of: LibraryFolderSummary.self) {
+            TableColumn("Name") { folder in
+                Text(folder.displayName)
+            }
+            TableColumn("Path") { folder in
+                Text(folder.rootPath)
+            }
+            TableColumn("Availability") { folder in
+                Text(folder.availabilityLabel)
+            }
+            TableColumn("Files") { folder in
+                Text(folder.fileCountLabel)
+            }
+            TableColumn("Last Seen") { folder in
+                Text(folder.lastSeenLabel ?? "—")
+            }
+            TableColumn("Last Scan") { folder in
+                Text(folder.lastScanLabel ?? "—")
+            }
+        } rows: {
+            ForEach(folders) { folder in
+                TableRow(folder)
             }
         }
     }

@@ -24,16 +24,64 @@ extension CineMindStore {
         limit: Int,
         offset: Int = 0
     ) throws -> [PersistedMediaItemSummary] {
+        try fetchMediaItemSummaries(
+            sql: mediaItemSummarySQL(
+                whereClause: mediaType != nil ? "WHERE media_items.media_type = ?" : "",
+                orderClause: mediaItemTitleOrderSQL
+            ),
+            stringBindings: mediaType.map { [$0.rawValue] } ?? [],
+            limit: limit,
+            offset: offset
+        )
+    }
+
+    public func fetchRecentlyPlayedMediaItemSummaries(
+        limit: Int,
+        offset: Int = 0
+    ) throws -> [PersistedMediaItemSummary] {
+        try fetchMediaItemSummaries(
+            sql: mediaItemSummarySQL(
+                whereClause: "WHERE latest_playback.latest_played_at IS NOT NULL",
+                orderClause: mediaItemRecentlyPlayedOrderSQL
+            ),
+            stringBindings: [],
+            limit: limit,
+            offset: offset
+        )
+    }
+
+    public func fetchMediaItemSummariesNeedingMetadata(
+        limit: Int,
+        offset: Int = 0
+    ) throws -> [PersistedMediaItemSummary] {
+        try fetchMediaItemSummaries(
+            sql: mediaItemSummarySQL(
+                whereClause: """
+                    WHERE COALESCE(metadata_item_presence.has_metadata_item, 0) = 0
+                       OR COALESCE(metadata_source_presence.has_metadata_source_record, 0) = 0
+                    """,
+                orderClause: mediaItemTitleOrderSQL
+            ),
+            stringBindings: [],
+            limit: limit,
+            offset: offset
+        )
+    }
+
+    private func fetchMediaItemSummaries(
+        sql: String,
+        stringBindings: [String],
+        limit: Int,
+        offset: Int
+    ) throws -> [PersistedMediaItemSummary] {
         guard limit > 0 else {
             return []
         }
 
-        let statement = try preparePersistenceQuery(
-            mediaItemSummarySQL(hasMediaTypeFilter: mediaType != nil)
-        )
+        let statement = try preparePersistenceQuery(sql)
         var bindIndex: Int32 = 1
-        if let mediaType {
-            try statement.bind(mediaType.rawValue, at: bindIndex)
+        for stringBinding in stringBindings {
+            try statement.bind(stringBinding, at: bindIndex)
             bindIndex += 1
         }
         try statement.bind(limit, at: bindIndex)
@@ -66,7 +114,17 @@ extension CineMindStore {
     }
 }
 
-private func mediaItemSummarySQL(hasMediaTypeFilter: Bool) -> String {
+private let mediaItemTitleOrderSQL = """
+    ORDER BY media_items.title COLLATE NOCASE ASC,
+             media_items.id ASC
+    """
+
+private let mediaItemRecentlyPlayedOrderSQL = """
+    ORDER BY latest_playback.latest_played_at DESC,
+             media_items.id ASC
+    """
+
+private func mediaItemSummarySQL(whereClause: String, orderClause: String) -> String {
     """
     WITH file_counts AS (
         SELECT media_files.media_item_id,
@@ -129,9 +187,8 @@ private func mediaItemSummarySQL(hasMediaTypeFilter: Bool) -> String {
       ON metadata_item_presence.media_item_id = media_items.id
     LEFT JOIN metadata_source_presence
       ON metadata_source_presence.media_item_id = media_items.id
-    \(hasMediaTypeFilter ? "WHERE media_items.media_type = ?" : "")
-    ORDER BY media_items.title COLLATE NOCASE ASC,
-             media_items.id ASC
+    \(whereClause)
+    \(orderClause)
     LIMIT ? OFFSET ?
     """
 }

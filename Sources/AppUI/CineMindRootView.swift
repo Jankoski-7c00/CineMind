@@ -63,14 +63,22 @@ fileprivate struct ReadyShellView: View {
     init(environment: AppShellEnvironment) {
         self.environment = environment
         _browserViewModel = StateObject(wrappedValue:
-            LibraryBrowserViewModel(mediaSummaryBrowser: environment.mediaSummaryBrowser))
+            LibraryBrowserViewModel(
+                mediaSummaryBrowser: environment.mediaSummaryBrowser,
+                folderSummaryBrowser: environment.folderSummaryBrowser
+            ))
         _detailViewModel = StateObject(wrappedValue:
             LibraryItemDetailViewModel(detailBrowser: environment.itemDetailBrowser))
     }
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(selectedSection: $browserViewModel.selectedSection)
+            SidebarView(
+                selectedSection: Binding(
+                    get: { browserViewModel.selectedSection },
+                    set: { browserViewModel.selectSection($0) }
+                )
+            )
         } content: {
             LibraryBrowserView(viewModel: browserViewModel)
         } detail: {

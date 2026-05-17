@@ -1541,6 +1541,264 @@ final class PersistenceRepositoryTests: XCTestCase {
         )
     }
 
+    func testFetchRecentlyPlayedMediaItemSummariesOrdersByLatestPlaybackAndDeduplicates() throws {
+        let store = try makeStore()
+        let library = try store.createOrLoadLibrary()
+        let folder = LibraryFolder(libraryID: library.id, displayName: "Movies", rootPath: "/media")
+        let arrival = MediaItem(
+            id: "summary-recent-arrival",
+            mediaType: .movie,
+            title: "Arrival"
+        )
+        let moon = MediaItem(
+            id: "summary-recent-moon",
+            mediaType: .movie,
+            title: "Moon"
+        )
+        let neverPlayed = MediaItem(
+            id: "summary-recent-never",
+            mediaType: .movie,
+            title: "Never Played"
+        )
+        try store.addLibraryFolder(folder)
+        try store.saveMediaItem(arrival)
+        try store.saveMediaItem(moon)
+        try store.saveMediaItem(neverPlayed)
+
+        let arrivalFileA = mediaFile(
+            itemID: arrival.id,
+            folderID: folder.id,
+            relativePath: "Arrival A.mkv",
+            absolutePathHash: "summary-recent-arrival-a",
+            fileSizeBytes: 100
+        )
+        let arrivalFileB = mediaFile(
+            itemID: arrival.id,
+            folderID: folder.id,
+            relativePath: "Arrival B.mkv",
+            absolutePathHash: "summary-recent-arrival-b",
+            fileSizeBytes: 100
+        )
+        let moonFile = mediaFile(
+            itemID: moon.id,
+            folderID: folder.id,
+            relativePath: "Moon.mkv",
+            absolutePathHash: "summary-recent-moon",
+            fileSizeBytes: 100
+        )
+        try store.saveMediaFile(arrivalFileA)
+        try store.saveMediaFile(arrivalFileB)
+        try store.saveMediaFile(moonFile)
+
+        let olderPlayedAt = Date(timeIntervalSince1970: 1_000)
+        let newerPlayedAt = Date(timeIntervalSince1970: 3_000)
+        try store.savePlaybackProgress(
+            mediaItemID: arrival.id,
+            mediaFileID: arrivalFileA.id,
+            positionMS: 1_000,
+            durationMS: nil,
+            completed: false,
+            playedAt: olderPlayedAt
+        )
+        try store.savePlaybackProgress(
+            mediaItemID: arrival.id,
+            mediaFileID: arrivalFileB.id,
+            positionMS: 2_000,
+            durationMS: nil,
+            completed: false,
+            playedAt: newerPlayedAt
+        )
+        try store.savePlaybackProgress(
+            mediaItemID: moon.id,
+            mediaFileID: moonFile.id,
+            positionMS: 3_000,
+            durationMS: nil,
+            completed: false,
+            playedAt: newerPlayedAt
+        )
+
+        let summaries = try store.fetchRecentlyPlayedMediaItemSummaries(limit: 10)
+
+        XCTAssertEqual(summaries.map(\.id), [arrival.id, moon.id])
+        XCTAssertEqual(summaries.filter { $0.id == arrival.id }.count, 1)
+        XCTAssertEqual(summaries.first?.latestPlayedAt, newerPlayedAt)
+        XCTAssertFalse(summaries.contains { $0.id == neverPlayed.id })
+        XCTAssertEqual(
+            try store.fetchRecentlyPlayedMediaItemSummaries(limit: 1, offset: 1).map(\.id),
+            [moon.id]
+        )
+        XCTAssertEqual(
+            try store.fetchRecentlyPlayedMediaItemSummaries(limit: 1, offset: -10).map(\.id),
+            [arrival.id]
+        )
+        XCTAssertEqual(try store.fetchRecentlyPlayedMediaItemSummaries(limit: 0), [])
+    }
+
+    func testFetchMediaItemSummariesNeedingMetadataUsesNotCompleteSemantics() throws {
+        let store = try makeStore()
+        let complete = MediaItem(
+            id: "summary-metadata-complete",
+            mediaType: .movie,
+            title: "Alpha Complete"
+        )
+        let missing = MediaItem(
+            id: "summary-metadata-missing",
+            mediaType: .movie,
+            title: "Beta Missing"
+        )
+        let sourceOnly = MediaItem(
+            id: "summary-metadata-source",
+            mediaType: .movie,
+            title: "Delta Source"
+        )
+        let itemOnly = MediaItem(
+            id: "summary-metadata-item",
+            mediaType: .movie,
+            title: "Gamma Item"
+        )
+        try store.saveMediaItem(complete)
+        try store.saveMediaItem(missing)
+        try store.saveMediaItem(sourceOnly)
+        try store.saveMediaItem(itemOnly)
+        try store.saveMetadataItem(MetadataItem(mediaItemID: complete.id, title: "Complete"))
+        try store.saveMetadataSourceRecord(
+            try MetadataSourceRecord.validated(
+                mediaItemID: complete.id,
+                provider: .tmdb,
+                providerID: "complete",
+                providerMediaType: .movie,
+                confidence: 1.0,
+                matchSource: .automatic
+            )
+        )
+        try store.saveMetadataItem(MetadataItem(mediaItemID: itemOnly.id, title: "Item Only"))
+        try store.saveMetadataSourceRecord(
+            try MetadataSourceRecord.validated(
+                mediaItemID: sourceOnly.id,
+                provider: .tmdb,
+                providerID: "source",
+                providerMediaType: .movie,
+                confidence: 1.0,
+                matchSource: .automatic
+            )
+        )
+
+        XCTAssertEqual(
+            try store.fetchMediaItemSummariesNeedingMetadata(limit: 10).map(\.id),
+            [missing.id, sourceOnly.id, itemOnly.id]
+        )
+        XCTAssertEqual(
+            try store.fetchMediaItemSummariesNeedingMetadata(limit: 1, offset: -10).map(\.id),
+            [missing.id]
+        )
+        XCTAssertEqual(
+            try store.fetchMediaItemSummariesNeedingMetadata(limit: 1, offset: 1).map(\.id),
+            [sourceOnly.id]
+        )
+        XCTAssertEqual(try store.fetchMediaItemSummariesNeedingMetadata(limit: 0), [])
+    }
+
+    func testFetchLibraryFolderSummariesReturnsAggregatesAndNormalizesBounds() throws {
+        let store = try makeStore()
+        let library = try store.createOrLoadLibrary()
+        let otherLibrary = Library(id: "folder-summary-other-library", name: "Other")
+        let lastSeenAt = Date(timeIntervalSince1970: 2_000)
+        let lastScanAt = Date(timeIntervalSince1970: 3_000)
+        let availableFolder = LibraryFolder(
+            id: "folder-summary-available",
+            libraryID: library.id,
+            displayName: "Alpha",
+            rootPath: "/media/alpha",
+            isAvailable: true,
+            lastSeenAt: lastSeenAt,
+            lastScanAt: lastScanAt
+        )
+        let unavailableFolder = LibraryFolder(
+            id: "folder-summary-unavailable",
+            libraryID: library.id,
+            displayName: "Beta",
+            rootPath: "/media/beta",
+            isAvailable: false
+        )
+        let otherFolder = LibraryFolder(
+            id: "folder-summary-other",
+            libraryID: otherLibrary.id,
+            displayName: "Other",
+            rootPath: "/media/other"
+        )
+        let item = MediaItem(
+            id: "folder-summary-item",
+            mediaType: .movie,
+            title: "Arrival"
+        )
+        try store.saveLibrary(otherLibrary)
+        try store.addLibraryFolder(availableFolder)
+        try store.addLibraryFolder(unavailableFolder)
+        try store.addLibraryFolder(otherFolder)
+        try store.saveMediaItem(item)
+        try store.saveMediaFile(
+            mediaFile(
+                itemID: item.id,
+                folderID: availableFolder.id,
+                relativePath: "Available.mkv",
+                absolutePathHash: "folder-summary-available-file",
+                fileSizeBytes: 100,
+                isAvailable: true
+            )
+        )
+        try store.saveMediaFile(
+            mediaFile(
+                itemID: item.id,
+                folderID: availableFolder.id,
+                relativePath: "Missing.mkv",
+                absolutePathHash: "folder-summary-missing-file",
+                fileSizeBytes: 100,
+                isAvailable: false
+            )
+        )
+        try store.saveMediaFile(
+            mediaFile(
+                itemID: item.id,
+                folderID: unavailableFolder.id,
+                relativePath: "Offline.mkv",
+                absolutePathHash: "folder-summary-offline-file",
+                fileSizeBytes: 100,
+                isAvailable: true
+            )
+        )
+
+        let summaries = try store.fetchLibraryFolderSummaries(libraryID: library.id, limit: 10)
+
+        XCTAssertEqual(summaries.map(\.id), [availableFolder.id, unavailableFolder.id])
+        XCTAssertFalse(summaries.contains { $0.id == otherFolder.id })
+
+        let availableSummary = try XCTUnwrap(summaries.first { $0.id == availableFolder.id })
+        XCTAssertEqual(availableSummary.displayName, "Alpha")
+        XCTAssertEqual(availableSummary.rootPath, "/media/alpha")
+        XCTAssertTrue(availableSummary.isAvailable)
+        XCTAssertEqual(availableSummary.lastSeenAt, lastSeenAt)
+        XCTAssertEqual(availableSummary.lastScanAt, lastScanAt)
+        XCTAssertEqual(availableSummary.mediaFileCount, 2)
+        XCTAssertEqual(availableSummary.unavailableMediaFileCount, 1)
+
+        let unavailableSummary = try XCTUnwrap(summaries.first { $0.id == unavailableFolder.id })
+        XCTAssertFalse(unavailableSummary.isAvailable)
+        XCTAssertEqual(unavailableSummary.mediaFileCount, 1)
+        XCTAssertEqual(unavailableSummary.unavailableMediaFileCount, 1)
+
+        XCTAssertEqual(
+            try store.fetchLibraryFolderSummaries(libraryID: library.id, limit: 1, offset: 1)
+                .map(\.id),
+            [unavailableFolder.id]
+        )
+        XCTAssertEqual(
+            try store.fetchLibraryFolderSummaries(libraryID: library.id, limit: 1, offset: -10)
+                .map(\.id),
+            [availableFolder.id]
+        )
+        XCTAssertEqual(try store.fetchLibraryFolderSummaries(libraryID: library.id, limit: 0), [])
+    }
+
     func testScanRunPersistence() throws {
         let store = try makeStore()
         let library = try store.createOrLoadLibrary()

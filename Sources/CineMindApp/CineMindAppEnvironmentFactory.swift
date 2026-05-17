@@ -10,9 +10,11 @@ enum CineMindAppEnvironmentFactory {
         _ = try store.ensureLibrary(name: "CineMind Library")
         let mediaSummaryBrowser = LibraryMediaSummaryUseCase(store: store)
         let itemDetailBrowser = LibraryItemDetailUseCase(store: store)
+        let folderSummaryBrowser = LibraryFolderSummaryUseCase(store: store)
         return AppShellEnvironment(
             mediaSummaryBrowser: mediaSummaryBrowser,
-            itemDetailBrowser: itemDetailBrowser
+            itemDetailBrowser: itemDetailBrowser,
+            folderSummaryBrowser: folderSummaryBrowser
         )
     }
 

@@ -16,6 +16,12 @@ public struct SidebarView: View {
                 .tag(LibraryBrowserSection.movies)
             Label("TV Episodes", systemImage: "tv")
                 .tag(LibraryBrowserSection.tvEpisodes)
+            Label("Recently Played", systemImage: "clock.arrow.circlepath")
+                .tag(LibraryBrowserSection.recentlyPlayed)
+            Label("Needs Metadata", systemImage: "tag")
+                .tag(LibraryBrowserSection.needsMetadata)
+            Label("Folders", systemImage: "folder")
+                .tag(LibraryBrowserSection.folders)
         }
     }
 }

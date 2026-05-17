@@ -6,6 +6,13 @@ public enum LibraryBrowserSection: Sendable, Equatable {
     case library
     case movies
     case tvEpisodes
+    case recentlyPlayed
+    case needsMetadata
+    case folders
+}
+
+public enum LibraryBrowserError: Error, Sendable, Equatable {
+    case unsupportedMediaSection(LibraryBrowserSection)
 }
 
 public struct LibraryBrowserPage: Sendable, Equatable {
@@ -75,6 +82,14 @@ public protocol ApplicationLibraryMediaSummaryStore: Sendable {
         limit: Int,
         offset: Int
     ) throws -> [PersistedMediaItemSummary]
+    func fetchRecentlyPlayedMediaItemSummaries(
+        limit: Int,
+        offset: Int
+    ) throws -> [PersistedMediaItemSummary]
+    func fetchMediaItemSummariesNeedingMetadata(
+        limit: Int,
+        offset: Int
+    ) throws -> [PersistedMediaItemSummary]
 }
 
 extension CineMindStore: @unchecked Sendable {
@@ -115,6 +130,10 @@ public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable 
         section: LibraryBrowserSection,
         page: LibraryBrowserPage
     ) async throws -> LibraryMediaSummarySnapshot {
+        guard section != .folders else {
+            throw LibraryBrowserError.unsupportedMediaSection(section)
+        }
+
         let normalizedPage = LibraryBrowserPage(
             limit: page.limit,
             offset: max(page.offset, 0)
@@ -129,7 +148,7 @@ public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable 
         }
 
         let summaries = try await fetchSummaries(
-            mediaType: section.mediaTypeFilter,
+            section: section,
             page: normalizedPage
         )
         return LibraryMediaSummarySnapshot(
@@ -140,16 +159,16 @@ public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable 
     }
 
     private func fetchSummaries(
-        mediaType: MediaType?,
+        section: LibraryBrowserSection,
         page: LibraryBrowserPage
     ) async throws -> [PersistedMediaItemSummary] {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 do {
-                    let summaries = try store.fetchMediaItemSummaries(
-                        mediaType: mediaType,
-                        limit: page.limit,
-                        offset: page.offset
+                    let summaries = try fetchPersistedSummaries(
+                        section: section,
+                        page: page,
+                        store: store
                     )
                     continuation.resume(returning: summaries)
                 } catch {
@@ -240,6 +259,33 @@ public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable 
     }
 
     private static func defaultLastPlayedLabel(_ date: Date) -> String {
+        LibraryBrowserDateLabel.format(date)
+    }
+}
+
+private func fetchPersistedSummaries(
+    section: LibraryBrowserSection,
+    page: LibraryBrowserPage,
+    store: any ApplicationLibraryMediaSummaryStore
+) throws -> [PersistedMediaItemSummary] {
+    switch section {
+    case .library:
+        try store.fetchMediaItemSummaries(mediaType: nil, limit: page.limit, offset: page.offset)
+    case .movies:
+        try store.fetchMediaItemSummaries(mediaType: .movie, limit: page.limit, offset: page.offset)
+    case .tvEpisodes:
+        try store.fetchMediaItemSummaries(mediaType: .episode, limit: page.limit, offset: page.offset)
+    case .recentlyPlayed:
+        try store.fetchRecentlyPlayedMediaItemSummaries(limit: page.limit, offset: page.offset)
+    case .needsMetadata:
+        try store.fetchMediaItemSummariesNeedingMetadata(limit: page.limit, offset: page.offset)
+    case .folders:
+        throw LibraryBrowserError.unsupportedMediaSection(section)
+    }
+}
+
+enum LibraryBrowserDateLabel {
+    static func format(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [
             .withFullDate,
@@ -249,18 +295,5 @@ public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable 
         ]
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         return formatter.string(from: date)
-    }
-}
-
-private extension LibraryBrowserSection {
-    var mediaTypeFilter: MediaType? {
-        switch self {
-        case .library:
-            nil
-        case .movies:
-            .movie
-        case .tvEpisodes:
-            .episode
-        }
     }
 }
