@@ -780,3 +780,44 @@ Phase 4.2 is complete only if:
 - Empty/loading/error states are visible.
 - Existing shell/spike targets still build.
 - Existing tests pass.
+
+---
+
+# 11. Completion Status
+
+Status: implementation complete; automated/startup validation passed.
+
+Completed:
+
+- Persistence media summary query added.
+- Application summary DTO/use case added.
+- CineMindApp service wiring added.
+- AppUI summary table/list added.
+- Detail query and detail placeholder added.
+- Recently Played, Needs Metadata, and Folders sections added.
+- AppUI boundary checks passed:
+  - no AppUI imports of Persistence, Scanner, Metadata, Playback, or LibMPVPlayback
+  - no AppUI references to `LibraryID`, `CineMindStore`, database paths, Application Support, or `FileManager`
+- Migrations unchanged.
+- `swift test` passed: 253 tests.
+- Listed build targets passed:
+  - `AppUI`
+  - `CineMindApp`
+  - `CineMindShell`
+  - `CineMindPlaybackShell`
+  - `CineMindPlaybackSurfaceSpike`
+  - `CineMindMetadataShell`
+- Automated/startup validation passed:
+  - `swift run CineMindApp` built and launched without immediate crash.
+
+Manual GUI visual validation is still pending because the tool session could not inspect the UI interactively.
+
+Remaining limitations:
+
+- no scanner/folder picker
+- no metadata mutation
+- no playback
+- no poster decoding
+- no grid
+- no search/FTS
+- no automated UI screenshot tests
