@@ -69,6 +69,8 @@ public protocol ApplicationPlaybackStore: PlaybackProgressStore {
         mediaItemID: MediaItemID,
         mediaFileID: MediaFileID
     ) throws -> PlaybackHistory?
+    func fetchMediaFile(id: MediaFileID) throws -> PersistedMediaFile?
+    func fetchMediaItem(id: MediaItemID) throws -> MediaItem?
 }
 
 extension CineMindStore: ApplicationPlaybackStore {}
@@ -96,19 +98,25 @@ public struct OpenMediaUseCase {
     }
 
     private func openMapped(mediaFileID: MediaFileID) throws -> PlayableFile {
-        let (mediaFile, mediaItem) = try fetchMediaFileAndItem(mediaFileID: mediaFileID)
-        guard mediaFile.isAvailable else {
-            throw ApplicationPlaybackError.mediaFileUnavailable
+        guard let persistedFile = try store.fetchMediaFile(id: mediaFileID) else {
+            throw ApplicationPlaybackError.mediaFileNotFound
         }
 
-        let libraryFolder = try fetchLibraryFolder(id: mediaFile.libraryFolderID)
-        guard libraryFolder.isAvailable else {
+        guard !persistedFile.folderRootPath.isEmpty else {
             throw ApplicationPlaybackError.libraryFolderUnavailable
         }
 
+        guard persistedFile.folderIsAvailable else {
+            throw ApplicationPlaybackError.libraryFolderUnavailable
+        }
+
+        guard persistedFile.isAvailable else {
+            throw ApplicationPlaybackError.mediaFileUnavailable
+        }
+
         let resolvedURL = try resolveFileURL(
-            rootPath: libraryFolder.rootPath,
-            relativePath: mediaFile.relativePath
+            rootPath: persistedFile.folderRootPath,
+            relativePath: persistedFile.relativePath
         )
 
         var isDirectory: ObjCBool = false
@@ -117,48 +125,28 @@ public struct OpenMediaUseCase {
             throw ApplicationPlaybackError.resolvedFileMissing
         }
 
+        guard let mediaItem = try store.fetchMediaItem(id: persistedFile.mediaItemID) else {
+            throw ApplicationPlaybackError.mediaFileNotFound
+        }
+
         let history = try store.fetchPlaybackHistory(
-            mediaItemID: mediaFile.mediaItemID,
-            mediaFileID: mediaFile.id
+            mediaItemID: persistedFile.mediaItemID,
+            mediaFileID: persistedFile.id
+        )
+
+        let displayName = self.displayName(
+            mediaItem: mediaItem,
+            resolvedURL: resolvedURL,
+            persistedFile: persistedFile
         )
 
         return try PlayableFile(
-            mediaItemID: mediaFile.mediaItemID,
-            mediaFileID: mediaFile.id,
+            mediaItemID: persistedFile.mediaItemID,
+            mediaFileID: persistedFile.id,
             url: resolvedURL,
-            displayName: displayName(
-                mediaItem: mediaItem,
-                mediaFile: mediaFile,
-                resolvedURL: resolvedURL
-            ),
+            displayName: displayName,
             resumePositionMS: PlaybackResumePolicy.resumePositionMS(for: history)
         )
-    }
-
-    private func fetchMediaFileAndItem(
-        mediaFileID: MediaFileID
-    ) throws -> (MediaFile, MediaItem) {
-        // Phase 2 temporary lookup: replace with direct fetchMediaFile(id:) once Persistence exposes it.
-        for item in try store.fetchMediaItems() {
-            for file in try store.fetchMediaFiles(mediaItemID: item.id) where file.id == mediaFileID {
-                return (file, item)
-            }
-        }
-
-        throw ApplicationPlaybackError.mediaFileNotFound
-    }
-
-    private func fetchLibraryFolder(id libraryFolderID: LibraryFolderID) throws -> LibraryFolder {
-        guard let library = try store.fetchLibrary() else {
-            throw ApplicationPlaybackError.libraryFolderNotFound
-        }
-
-        guard let folder = try store.fetchLibraryFolders(libraryID: library.id)
-            .first(where: { $0.id == libraryFolderID }) else {
-            throw ApplicationPlaybackError.libraryFolderNotFound
-        }
-
-        return folder
     }
 
     private func resolveFileURL(rootPath: String, relativePath: String) throws -> URL {
@@ -188,15 +176,15 @@ public struct OpenMediaUseCase {
 
     private func displayName(
         mediaItem: MediaItem,
-        mediaFile: MediaFile,
-        resolvedURL: URL
+        resolvedURL: URL,
+        persistedFile: PersistedMediaFile
     ) -> String {
         let itemTitle = mediaItem.title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !itemTitle.isEmpty {
             return itemTitle
         }
 
-        let fileName = mediaFile.fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileName = persistedFile.fileName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !fileName.isEmpty {
             return fileName
         }

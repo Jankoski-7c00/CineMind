@@ -1873,6 +1873,109 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertTrue(try store.fetchMediaItems().isEmpty)
     }
 
+    func testFetchMediaFileByIDReturnsAllFieldsWhenFileAndFolderAreAvailable() throws {
+        let context = try makePlaybackContext()
+        let result = try XCTUnwrap(context.store.fetchMediaFile(id: context.file.id))
+
+        XCTAssertEqual(result.id, context.file.id)
+        XCTAssertEqual(result.mediaItemID, context.item.id)
+        XCTAssertEqual(result.libraryFolderID, context.folder.id)
+        XCTAssertEqual(result.fileName, context.file.fileName)
+        XCTAssertEqual(result.fileExtension, context.file.fileExtension)
+        XCTAssertEqual(result.fileSizeBytes, context.file.fileSizeBytes)
+        XCTAssertEqual(result.relativePath, context.file.relativePath)
+        XCTAssertTrue(result.isAvailable)
+        XCTAssertTrue(result.folderIsAvailable)
+        XCTAssertEqual(result.folderRootPath, context.folder.rootPath)
+    }
+
+    func testFetchMediaFileByIDReturnsNilForUnknownID() throws {
+        let store = try makeStore()
+        XCTAssertNil(try store.fetchMediaFile(id: "nonexistent-id"))
+    }
+
+    func testFetchMediaFileByIDIsAvailableIsFalseWhenFileIsUnavailable() throws {
+        let context = try makePlaybackContext(mediaFileIsAvailable: false)
+        let result = try XCTUnwrap(context.store.fetchMediaFile(id: context.file.id))
+
+        XCTAssertFalse(result.isAvailable)
+        XCTAssertTrue(result.folderIsAvailable)
+        XCTAssertEqual(result.folderRootPath, context.folder.rootPath)
+    }
+
+    func testFetchMediaFileByIDIsAvailableIsFalseWhenFolderIsUnavailable() throws {
+        let context = try makePlaybackContext(libraryFolderIsAvailable: false)
+        let result = try XCTUnwrap(context.store.fetchMediaFile(id: context.file.id))
+
+        XCTAssertFalse(result.isAvailable)
+        XCTAssertFalse(result.folderIsAvailable)
+        XCTAssertEqual(result.folderRootPath, context.folder.rootPath)
+    }
+
+    func testFetchMediaFileByIDHandlesMissingLibraryFolderRow() throws {
+        let store = try makeStore()
+        let library = try store.createOrLoadLibrary(name: "Local")
+        let folder = LibraryFolder(
+            libraryID: library.id,
+            displayName: "Movies",
+            rootPath: "/media"
+        )
+        try store.addLibraryFolder(folder)
+
+        let item = MediaItem(mediaType: .movie, title: "Arrival", year: 2016)
+        try store.saveMediaItem(item)
+
+        let file = MediaFile(
+            mediaItemID: item.id,
+            libraryFolderID: "nonexistent-folder-id",
+            relativePath: "Arrival.mkv",
+            absolutePathHash: "hash",
+            fileName: "Arrival.mkv",
+            fileExtension: "mkv",
+            fileSizeBytes: 100,
+            modifiedAt: Date(timeIntervalSince1970: 100),
+            isAvailable: true,
+            lastSeenAt: Date(timeIntervalSince1970: 100),
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        // Direct INSERT to bypass foreign key enforcement in the test
+        try RawSQLiteFixture.execute(
+            path: databaseURL.path,
+            sql: """
+                INSERT INTO media_files (
+                    id, media_item_id, library_folder_id, relative_path,
+                    absolute_path_hash, file_name, file_extension, file_size_bytes,
+                    modified_at, is_available, last_seen_at, created_at, updated_at
+                ) VALUES (
+                    '\(file.id)', '\(file.mediaItemID)', '\(file.libraryFolderID)',
+                    '\(file.relativePath)', '\(file.absolutePathHash)',
+                    '\(file.fileName)', '\(file.fileExtension)', \(file.fileSizeBytes),
+                    \(file.modifiedAt!.timeIntervalSince1970), 1,
+                    \(file.lastSeenAt!.timeIntervalSince1970),
+                    \(file.createdAt.timeIntervalSince1970),
+                    \(file.updatedAt.timeIntervalSince1970)
+                )
+                """
+        )
+
+        let result = try XCTUnwrap(store.fetchMediaFile(id: file.id))
+
+        XCTAssertFalse(result.isAvailable)
+        XCTAssertFalse(result.folderIsAvailable)
+        XCTAssertEqual(result.folderRootPath, "")
+    }
+
+    func testFetchMediaFileByIDWorksWithReadOnlyStore() throws {
+        let context = try makePlaybackContext()
+        let readOnly = try CineMindStore(readOnlyPath: databaseURL.path)
+        let result = try XCTUnwrap(readOnly.fetchMediaFile(id: context.file.id))
+
+        XCTAssertEqual(result.id, context.file.id)
+        XCTAssertTrue(result.isAvailable)
+    }
+
     private func makeStore() throws -> CineMindStore {
         try CineMindStore(path: databaseURL.path)
     }
@@ -1887,15 +1990,27 @@ final class PersistenceRepositoryTests: XCTestCase {
         return MediaContext(store: store, library: library, folder: folder, item: item)
     }
 
-    private func makePlaybackContext() throws -> PlaybackContext {
+    private func makePlaybackContext(
+        mediaFileIsAvailable: Bool = true,
+        libraryFolderIsAvailable: Bool = true
+    ) throws -> PlaybackContext {
         let context = try makeMediaContext()
         let file = mediaFile(
             itemID: context.item.id,
             folderID: context.folder.id,
             relativePath: "Arrival (2016).mkv",
             absolutePathHash: "arrival-path-hash",
-            fileSizeBytes: 1024
+            fileSizeBytes: 1024,
+            isAvailable: mediaFileIsAvailable
         )
+        if !libraryFolderIsAvailable {
+            try context.store.updateLibraryFolderAvailability(
+                id: context.folder.id,
+                isAvailable: false,
+                lastSeenAt: nil,
+                lastScanAt: nil
+            )
+        }
         try context.store.saveMediaFile(file)
         return PlaybackContext(
             store: context.store,
