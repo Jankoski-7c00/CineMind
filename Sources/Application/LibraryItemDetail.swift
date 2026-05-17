@@ -9,6 +9,48 @@ public struct LibraryFileSummary: Sendable, Equatable {
     public let availabilityLabel: String
 }
 
+public struct LibraryMetadataDetail: Sendable, Equatable {
+    public let statusLabel: String
+    public let localTitle: String
+    public let metadataTitle: String?
+    public let originalTitle: String?
+    public let summary: String?
+    public let languageLabel: String?
+    public let releaseOrAirDateLabel: String?
+    public let source: LibraryMetadataSourceDetail?
+}
+
+public struct LibraryMetadataSourceDetail: Sendable, Equatable {
+    public let providerLabel: String
+    public let providerID: String
+    public let providerMediaTypeLabel: String
+    public let confidenceLabel: String
+    public let matchSourceLabel: String
+    public let manualMatchLockLabel: String
+    public let matchedAtLabel: String
+    public let refreshedAtLabel: String?
+}
+
+public struct LibraryPosterAssetDetail: Identifiable, Sendable, Equatable {
+    public let id: PosterAssetID
+    public let isSelected: Bool
+    public let sourceLabel: String
+    public let remotePath: String
+    public let dimensionsLabel: String?
+    public let preferredCacheSizeLabel: String
+    public let localCachePath: String?
+    public let cachedAtLabel: String?
+    public let selectionSourceLabel: String
+    public let statusLabel: String
+}
+
+public struct LibrarySelectedPosterDetail: Sendable, Equatable {
+    public let asset: LibraryPosterAssetDetail?
+    public let localCachePath: String?
+    public let statusLabel: String
+    public let placeholderSeed: String
+}
+
 public struct LibraryItemDetailShell: Identifiable, Sendable, Equatable {
     public let id: MediaItemID
     public let displayTitle: String
@@ -19,6 +61,9 @@ public struct LibraryItemDetailShell: Identifiable, Sendable, Equatable {
     public let metadataLabel: String
     public let lastPlayedLabel: String?
     public let files: [LibraryFileSummary]
+    public let metadataDetail: LibraryMetadataDetail
+    public let selectedPoster: LibrarySelectedPosterDetail
+    public let posterAssets: [LibraryPosterAssetDetail]
 }
 
 public protocol LibraryItemDetailBrowsing: Sendable {
@@ -27,6 +72,12 @@ public protocol LibraryItemDetailBrowsing: Sendable {
 
 public protocol ApplicationLibraryItemDetailStore: Sendable {
     func fetchMediaItemDetail(id: MediaItemID) throws -> PersistedMediaItemDetail?
+    func fetchMetadataItem(mediaItemID: MediaItemID) throws -> MetadataItem?
+    func fetchMetadataSourceRecord(
+        mediaItemID: MediaItemID,
+        provider: MetadataProviderName
+    ) throws -> MetadataSourceRecord?
+    func fetchPosterAssets(mediaItemID: MediaItemID) throws -> [PosterAsset]
 }
 
 extension CineMindStore: ApplicationLibraryItemDetailStore {}
@@ -68,12 +119,29 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
 
     private func fetchPersistedDetail(
         id: MediaItemID
-    ) async throws -> PersistedMediaItemDetail? {
+    ) async throws -> PersistedLibraryItemDetail? {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 do {
-                    let detail = try store.fetchMediaItemDetail(id: id)
-                    continuation.resume(returning: detail)
+                    guard let detail = try store.fetchMediaItemDetail(id: id) else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+
+                    let metadataItem = try store.fetchMetadataItem(mediaItemID: detail.id)
+                    let sourceRecord = try store.fetchMetadataSourceRecord(
+                        mediaItemID: detail.id,
+                        provider: .tmdb
+                    )
+                    let posterAssets = try store.fetchPosterAssets(mediaItemID: detail.id)
+                    continuation.resume(
+                        returning: PersistedLibraryItemDetail(
+                            detail: detail,
+                            metadataItem: metadataItem,
+                            sourceRecord: sourceRecord,
+                            posterAssets: posterAssets
+                        )
+                    )
                 } catch {
                     continuation.resume(throwing: error)
                 }
@@ -81,17 +149,31 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
         }
     }
 
-    private func map(_ detail: PersistedMediaItemDetail) -> LibraryItemDetailShell {
-        LibraryItemDetailShell(
+    private func map(_ persisted: PersistedLibraryItemDetail) -> LibraryItemDetailShell {
+        let detail = persisted.detail
+        let metadataDetail = mapMetadataDetail(
+            detail: detail,
+            metadataItem: persisted.metadataItem,
+            sourceRecord: persisted.sourceRecord
+        )
+        let posterAssets = persisted.posterAssets.map(mapPosterAsset)
+        return LibraryItemDetailShell(
             id: detail.id,
             displayTitle: displayTitle(for: detail),
             mediaTypeLabel: mediaTypeLabel(for: detail.mediaType),
             yearOrEpisodeLabel: yearOrEpisodeLabel(for: detail),
             summary: detail.summary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             availabilityLabel: availabilityLabel(for: detail.files),
-            metadataLabel: metadataLabel(for: detail),
+            metadataLabel: metadataDetail.statusLabel,
             lastPlayedLabel: detail.latestPlayedAt.map(lastPlayedLabel),
-            files: detail.files.map(mapFile)
+            files: detail.files.map(mapFile),
+            metadataDetail: metadataDetail,
+            selectedPoster: selectedPoster(
+                mediaItemID: detail.id,
+                posterAssets: persisted.posterAssets,
+                posterAssetDetails: posterAssets
+            ),
+            posterAssets: posterAssets
         )
     }
 
@@ -162,8 +244,89 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
         return "partially available"
     }
 
-    private func metadataLabel(for detail: PersistedMediaItemDetail) -> String {
-        switch (detail.hasMetadataItem, detail.hasMetadataSourceRecord) {
+    private func mapMetadataDetail(
+        detail: PersistedMediaItemDetail,
+        metadataItem: MetadataItem?,
+        sourceRecord: MetadataSourceRecord?
+    ) -> LibraryMetadataDetail {
+        LibraryMetadataDetail(
+            statusLabel: metadataLabel(
+                metadataItem: metadataItem,
+                sourceRecord: sourceRecord
+            ),
+            localTitle: displayTitle(for: detail),
+            metadataTitle: trimmedLabel(metadataItem?.title),
+            originalTitle: trimmedLabel(metadataItem?.originalTitle),
+            summary: trimmedLabel(metadataItem?.summary),
+            languageLabel: trimmedLabel(metadataItem?.language),
+            releaseOrAirDateLabel: releaseOrAirDateLabel(for: metadataItem),
+            source: sourceRecord.map(mapMetadataSource)
+        )
+    }
+
+    private func mapMetadataSource(
+        _ sourceRecord: MetadataSourceRecord
+    ) -> LibraryMetadataSourceDetail {
+        LibraryMetadataSourceDetail(
+            providerLabel: providerLabel(for: sourceRecord.provider),
+            providerID: sourceRecord.providerID,
+            providerMediaTypeLabel: providerMediaTypeLabel(for: sourceRecord.providerMediaType),
+            confidenceLabel: confidenceLabel(for: sourceRecord.confidence),
+            matchSourceLabel: matchSourceLabel(for: sourceRecord.matchSource),
+            manualMatchLockLabel: sourceRecord.manualMatchLocked ? "manual lock" : "unlocked",
+            matchedAtLabel: dateLabel(sourceRecord.matchedAt),
+            refreshedAtLabel: sourceRecord.refreshedAt.map(dateLabel)
+        )
+    }
+
+    private func mapPosterAsset(_ asset: PosterAsset) -> LibraryPosterAssetDetail {
+        let localCachePath = trimmedLabel(asset.localCachePath)
+        return LibraryPosterAssetDetail(
+            id: asset.id,
+            isSelected: asset.isSelected,
+            sourceLabel: posterSourceLabel(for: asset.source),
+            remotePath: asset.remotePath,
+            dimensionsLabel: dimensionsLabel(width: asset.width, height: asset.height),
+            preferredCacheSizeLabel: asset.preferredCacheSize,
+            localCachePath: localCachePath,
+            cachedAtLabel: asset.cachedAt.map(dateLabel),
+            selectionSourceLabel: selectionSourceLabel(for: asset.selectionSource),
+            statusLabel: localCachePath == nil ? "uncached" : "cached"
+        )
+    }
+
+    private func selectedPoster(
+        mediaItemID: MediaItemID,
+        posterAssets: [PosterAsset],
+        posterAssetDetails: [LibraryPosterAssetDetail]
+    ) -> LibrarySelectedPosterDetail {
+        guard let selectedIndex = posterAssets.firstIndex(where: {
+            $0.assetType == .poster && $0.isSelected
+        }) else {
+            return LibrarySelectedPosterDetail(
+                asset: nil,
+                localCachePath: nil,
+                statusLabel: "no poster",
+                placeholderSeed: mediaItemID
+            )
+        }
+
+        let asset = posterAssetDetails[selectedIndex]
+        return LibrarySelectedPosterDetail(
+            asset: asset,
+            localCachePath: asset.localCachePath,
+            statusLabel: asset.localCachePath == nil
+                ? "selected poster uncached"
+                : "selected poster cached",
+            placeholderSeed: asset.id
+        )
+    }
+
+    private func metadataLabel(
+        metadataItem: MetadataItem?,
+        sourceRecord: MetadataSourceRecord?
+    ) -> String {
+        switch (metadataItem != nil, sourceRecord != nil) {
         case (true, true):
             "complete"
         case (true, false), (false, true):
@@ -171,6 +334,64 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
         case (false, false):
             "missing"
         }
+    }
+
+    private func releaseOrAirDateLabel(for metadataItem: MetadataItem?) -> String? {
+        trimmedLabel(metadataItem?.releaseDate) ?? trimmedLabel(metadataItem?.airDate)
+    }
+
+    private func providerLabel(for provider: MetadataProviderName) -> String {
+        provider.rawValue.uppercased()
+    }
+
+    private func providerMediaTypeLabel(for mediaType: MetadataProviderMediaType) -> String {
+        switch mediaType {
+        case .movie:
+            "Movie"
+        case .episode:
+            "TV Episode"
+        }
+    }
+
+    private func confidenceLabel(for confidence: Double) -> String {
+        "\(Int((confidence * 100.0).rounded()))%"
+    }
+
+    private func matchSourceLabel(for matchSource: MetadataMatchSource) -> String {
+        switch matchSource {
+        case .automatic:
+            "automatic"
+        case .manual:
+            "manual"
+        }
+    }
+
+    private func posterSourceLabel(for source: PosterAssetSource) -> String {
+        source.rawValue.uppercased()
+    }
+
+    private func dimensionsLabel(width: Int?, height: Int?) -> String? {
+        guard let width, let height else {
+            return nil
+        }
+        return "\(width)x\(height)"
+    }
+
+    private func selectionSourceLabel(for selectionSource: PosterSelectionSource) -> String {
+        switch selectionSource {
+        case .automatic:
+            "automatic"
+        case .manual:
+            "manual"
+        }
+    }
+
+    private func dateLabel(_ date: Date) -> String {
+        Self.defaultLastPlayedLabel(date)
+    }
+
+    private func trimmedLabel(_ value: String?) -> String? {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 
     private func fileAvailabilityLabel(for file: PersistedMediaFileSummary) -> String {
@@ -210,6 +431,13 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
         let gb = mb / 1024.0
         return String(format: "%.1f GB", gb)
     }
+}
+
+private struct PersistedLibraryItemDetail {
+    let detail: PersistedMediaItemDetail
+    let metadataItem: MetadataItem?
+    let sourceRecord: MetadataSourceRecord?
+    let posterAssets: [PosterAsset]
 }
 
 private extension String {
