@@ -2,6 +2,7 @@ import AppUI
 import Application
 import Foundation
 import Persistence
+import Scanner
 
 enum CineMindAppEnvironmentFactory {
     static func start() throws -> AppShellEnvironment {
@@ -11,10 +12,17 @@ enum CineMindAppEnvironmentFactory {
         let mediaSummaryBrowser = LibraryMediaSummaryUseCase(store: store)
         let itemDetailBrowser = LibraryItemDetailUseCase(store: store)
         let folderSummaryBrowser = LibraryFolderSummaryUseCase(store: store)
+        let folderPicker = AppKitLibraryFolderPicker()
+        let folderAdder = AddLibraryFolderUseCase(store: store)
+        let scanRunner = ScannerLibraryScanRunner(scanner: LibraryScanner(store: store))
+        let libraryScanner = RunLibraryScanUseCase(store: store, runner: scanRunner)
         return AppShellEnvironment(
             mediaSummaryBrowser: mediaSummaryBrowser,
             itemDetailBrowser: itemDetailBrowser,
-            folderSummaryBrowser: folderSummaryBrowser
+            folderSummaryBrowser: folderSummaryBrowser,
+            folderPicker: folderPicker,
+            folderAdder: folderAdder,
+            libraryScanner: libraryScanner
         )
     }
 

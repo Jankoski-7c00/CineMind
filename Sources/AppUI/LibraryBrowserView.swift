@@ -10,25 +10,84 @@ public struct LibraryBrowserView: View {
     }
 
     public var body: some View {
-        Group {
-            if viewModel.isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let errorMessage = viewModel.errorMessage {
-                errorContent(message: errorMessage)
-            } else if viewModel.selectedSection == .folders,
-                      let folderSnapshot = viewModel.folderSnapshot,
-                      !folderSnapshot.folders.isEmpty {
-                folderTableContent(folders: folderSnapshot.folders)
-            } else if let snapshot = viewModel.snapshot, !snapshot.items.isEmpty {
-                mediaTableContent(items: snapshot.items)
-            } else {
-                emptyContent
-            }
+        VStack(spacing: 0) {
+            workflowHeader
+            Divider()
+            browserContent
         }
         .task(id: viewModel.selectedSection) {
             await viewModel.load()
         }
+    }
+
+    private var workflowHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Button {
+                    Task { await viewModel.addFolder() }
+                } label: {
+                    Label("Add Folder", systemImage: "folder.badge.plus")
+                }
+
+                Button {
+                    Task { await viewModel.scanLibrary() }
+                } label: {
+                    Label("Scan", systemImage: "arrow.clockwise")
+                }
+
+                if viewModel.isAddingFolder {
+                    ProgressView("Adding folder...")
+                        .controlSize(.small)
+                } else if viewModel.isScanning {
+                    ProgressView("Scanning...")
+                        .controlSize(.small)
+                }
+
+                Spacer()
+            }
+            .disabled(viewModel.isAddingFolder || viewModel.isScanning)
+
+            if let workflowErrorMessage = viewModel.workflowErrorMessage {
+                Text(workflowErrorMessage)
+                    .font(.callout)
+                    .foregroundColor(.red)
+            } else if let workflowMessage = viewModel.workflowMessage {
+                Text(workflowMessage)
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+
+            if let lastScanResult = viewModel.lastScanResult {
+                scanResultSummary(lastScanResult)
+            }
+        }
+        .padding(12)
+    }
+
+    @ViewBuilder
+    private var browserContent: some View {
+        if viewModel.isLoading {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let errorMessage = viewModel.errorMessage {
+            errorContent(message: errorMessage)
+        } else if viewModel.selectedSection == .folders,
+                  let folderSnapshot = viewModel.folderSnapshot,
+                  !folderSnapshot.folders.isEmpty {
+            folderTableContent(folders: folderSnapshot.folders)
+        } else if let snapshot = viewModel.snapshot, !snapshot.items.isEmpty {
+            mediaTableContent(items: snapshot.items)
+        } else {
+            emptyContent
+        }
+    }
+
+    private func scanResultSummary(_ result: LibraryScanResultSummary) -> some View {
+        Text(
+            "Status: \(result.statusLabel) • Files discovered: \(result.counts.filesDiscovered) • Media items: \(result.counts.mediaItemsCreated) created, \(result.counts.mediaItemsUpdated) updated • Issues: \(result.counts.issuesRecorded)"
+        )
+        .font(.caption)
+        .foregroundColor(.secondary)
     }
 
     private var emptyContent: some View {

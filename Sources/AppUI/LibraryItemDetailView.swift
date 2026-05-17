@@ -25,6 +25,7 @@ public final class LibraryItemDetailViewModel: ObservableObject {
 
     public func loadDetail(for id: MediaItemID?) async {
         guard let id else {
+            loadingGeneration += 1
             currentItemID = nil
             detail = nil
             detailState = .empty

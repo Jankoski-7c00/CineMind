@@ -62,13 +62,19 @@ fileprivate struct ReadyShellView: View {
 
     init(environment: AppShellEnvironment) {
         self.environment = environment
+        let detailViewModel = LibraryItemDetailViewModel(detailBrowser: environment.itemDetailBrowser)
         _browserViewModel = StateObject(wrappedValue:
             LibraryBrowserViewModel(
                 mediaSummaryBrowser: environment.mediaSummaryBrowser,
-                folderSummaryBrowser: environment.folderSummaryBrowser
+                folderSummaryBrowser: environment.folderSummaryBrowser,
+                folderPicker: environment.folderPicker,
+                folderAdder: environment.folderAdder,
+                libraryScanner: environment.libraryScanner,
+                reloadSelectedItemDetail: { selectedItemID in
+                    await detailViewModel.loadDetail(for: selectedItemID)
+                }
             ))
-        _detailViewModel = StateObject(wrappedValue:
-            LibraryItemDetailViewModel(detailBrowser: environment.itemDetailBrowser))
+        _detailViewModel = StateObject(wrappedValue: detailViewModel)
     }
 
     var body: some View {
