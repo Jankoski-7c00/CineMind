@@ -4,6 +4,17 @@ Canonical file: `docs/phase-4-4-metadata-detail-posters.md`
 
 Phase 4.4 displays Phase 3 metadata and poster state in the app. It is read-only for metadata mutation workflows.
 
+Status: code-complete.
+
+Completion notes:
+
+- 4.4B Application metadata/poster DTO extension is complete.
+- 4.4C AppUI read-only metadata/poster text panel is complete.
+- 4.4D AppUI-local poster image loader is complete.
+- 4.4E detail view poster image loading wiring is complete.
+- 4.4F automated validation is complete.
+- Manual GUI validation remains pending because the completion pass was run from CLI validation only.
+
 ---
 
 # 1. Summary
@@ -518,6 +529,8 @@ Risks:
 
 ## 4.4B Application Metadata/Poster DTO Extension
 
+Status: completed.
+
 Files expected to change:
 
 - `Sources/Application/LibraryItemDetail.swift`
@@ -560,6 +573,8 @@ Risks:
 
 ## 4.4C AppUI Read-Only Metadata/Poster Text Panel With Placeholders
 
+Status: completed.
+
 Files expected to change:
 
 - `Sources/AppUI/LibraryItemDetailView.swift`
@@ -599,6 +614,8 @@ Risks:
 
 ## 4.4D Local Poster Image Loader
 
+Status: completed.
+
 Files expected to change:
 
 - `Sources/AppUI/PosterImageLoader.swift`
@@ -614,6 +631,10 @@ Exact APIs:
 - Add `PosterImageLoading`.
 - Add `PosterImageMemoryCache`.
 - Add `LocalPosterImageLoader`.
+
+Implementation note:
+
+- No `Package.swift` or AppUITests target change was made for this pass.
 
 Non-goals:
 
@@ -645,6 +666,8 @@ Risks:
 
 ## 4.4E Wire Poster Image Loading Into Detail View
 
+Status: completed.
+
 Files expected to change:
 
 - `Sources/AppUI/LibraryItemDetailView.swift`
@@ -658,10 +681,10 @@ Exact APIs:
 Internal view-model state:
 
 ```swift
-enum PosterImageState: Equatable {
+enum PosterImageState {
     case idle
     case loading
-    case loaded(CGImage)
+    case loaded(LoadedPosterImage)
     case placeholder(PosterImagePlaceholderReason)
 }
 ```
@@ -702,6 +725,8 @@ Risks:
 
 ## 4.4F Validation/Completion
 
+Status: completed for automated validation; manual GUI validation remains pending.
+
 Files expected to change:
 
 - No planned source changes except scoped fixes from validation.
@@ -734,6 +759,20 @@ rg "refresh|rematch|override|selectPoster|MetadataProvider|TMDB|fetchImages|down
 git diff -- Sources/Persistence/Migrations.swift
 ```
 
+Validation result:
+
+- `swift test` passed with 286 XCTest cases and 0 failures.
+- `swift build --target AppUI` passed.
+- `swift build --target CineMindApp` passed.
+- `swift build --target CineMindShell` passed.
+- `swift build --target CineMindPlaybackShell` passed.
+- `swift build --target CineMindPlaybackSurfaceSpike` passed.
+- `swift build --target CineMindMetadataShell` passed.
+- AppUI forbidden import grep returned no matches.
+- AppUI forbidden behavior grep returned one accepted read-only display hit: `Refreshed`.
+- `PosterImageLoading` was not wired through `AppShellEnvironment` or `CineMindApp`.
+- `Sources/Persistence/Migrations.swift` has no diff.
+
 Rollback scope:
 
 - Revert the smallest failed task first:
@@ -765,3 +804,8 @@ Phase 4.4 is complete only if:
 - No playback UI or playback behavior is introduced.
 - No migrations are introduced.
 - Existing tests pass.
+
+Code-complete status:
+
+- Complete for the implemented 4.4 code path and automated validation.
+- Remaining validation is manual GUI coverage listed in section 13.
