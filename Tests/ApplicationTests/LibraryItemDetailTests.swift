@@ -268,6 +268,44 @@ final class LibraryItemDetailTests: XCTestCase {
         XCTAssertEqual(detail.selectedPoster.asset?.id, "poster-selected")
     }
 
+    func testFilesMapIDsPlayabilityAndDisplayLabels() async throws {
+        let itemID = "files"
+        let files = [
+            persistedMediaFileSummary(
+                id: "file-playable",
+                fileName: "Playable.mkv",
+                fileExtension: "mkv",
+                fileSizeBytes: 1536,
+                isAvailable: true
+            ),
+            persistedMediaFileSummary(
+                id: "file-unplayable",
+                fileName: "Unplayable.mp4",
+                fileExtension: "mp4",
+                fileSizeBytes: 1024 * 1024,
+                isAvailable: false
+            )
+        ]
+        let store = RecordingLibraryItemDetailStore(
+            detail: makePersistedDetail(id: itemID, files: files)
+        )
+        let useCase = LibraryItemDetailUseCase(store: store)
+
+        let result = try await useCase.fetchDetail(id: itemID)
+        let detail = try XCTUnwrap(result)
+
+        XCTAssertEqual(detail.files.map(\.mediaFileID), ["file-playable", "file-unplayable"])
+        XCTAssertEqual(detail.files.map(\.isPlayable), [true, false])
+        XCTAssertEqual(detail.files.map(\.fileName), ["Playable.mkv", "Unplayable.mp4"])
+        XCTAssertEqual(detail.files.map(\.fileExtension), ["mkv", "mp4"])
+        XCTAssertEqual(detail.files.map(\.fileSizeLabel), ["1.5 KB", "1.0 MB"])
+        XCTAssertEqual(detail.files.map(\.availabilityLabel), ["available", "unavailable"])
+        XCTAssertEqual(
+            detail.files.filter(\.isPlayable).map(\.mediaFileID),
+            ["file-playable"]
+        )
+    }
+
     func testMissingMediaItemReturnsNilWithoutMetadataOrPosterReads() async throws {
         let store = RecordingLibraryItemDetailStore(detail: nil)
         let useCase = LibraryItemDetailUseCase(store: store)
@@ -467,7 +505,8 @@ private func makePersistedDetail(
     id: MediaItemID,
     title: String = "Arrival",
     mediaType: MediaType = .movie,
-    year: Int? = 2016
+    year: Int? = 2016,
+    files: [PersistedMediaFileSummary] = []
 ) -> PersistedMediaItemDetail {
     PersistedMediaItemDetail(
         id: id,
@@ -483,7 +522,26 @@ private func makePersistedDetail(
         hasMetadataItem: false,
         hasMetadataSourceRecord: false,
         latestPlayedAt: nil,
-        files: []
+        files: files
+    )
+}
+
+private func persistedMediaFileSummary(
+    id: MediaFileID,
+    fileName: String,
+    fileExtension: String,
+    fileSizeBytes: Int64,
+    isAvailable: Bool
+) -> PersistedMediaFileSummary {
+    PersistedMediaFileSummary(
+        id: id,
+        fileName: fileName,
+        fileExtension: fileExtension,
+        fileSizeBytes: fileSizeBytes,
+        relativePath: fileName,
+        isAvailable: isAvailable,
+        folderDisplayName: "Movies",
+        folderIsAvailable: true
     )
 }
 

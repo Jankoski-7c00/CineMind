@@ -62,7 +62,10 @@ fileprivate struct ReadyShellView: View {
 
     init(environment: AppShellEnvironment) {
         self.environment = environment
-        let detailViewModel = LibraryItemDetailViewModel(detailBrowser: environment.itemDetailBrowser)
+        let detailViewModel = LibraryItemDetailViewModel(
+            detailBrowser: environment.itemDetailBrowser,
+            playbackController: environment.playbackController
+        )
         _browserViewModel = StateObject(wrappedValue:
             LibraryBrowserViewModel(
                 mediaSummaryBrowser: environment.mediaSummaryBrowser,

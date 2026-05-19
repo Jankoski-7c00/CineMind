@@ -22,15 +22,49 @@ public final class LibraryItemDetailViewModel: ObservableObject {
     @Published public private(set) var detail: LibraryItemDetailShell?
     @Published public private(set) var detailState: DetailState = .empty
     @Published public private(set) var posterImageState: PosterImageState = .idle
+    @Published public private(set) var playbackStatus: PlaybackApplicationStatus = .idle
 
     private let detailBrowser: any LibraryItemDetailBrowsing
     private let posterImageLoader: any PosterImageLoading
+    private var playbackController: (any PlaybackApplicationControlling)?
+    private var playbackStatusTask: Task<Void, Never>?
     private var currentItemID: MediaItemID?
     private var loadingGeneration: Int = 0
 
-    public init(detailBrowser: any LibraryItemDetailBrowsing) {
+    public init(
+        detailBrowser: any LibraryItemDetailBrowsing,
+        playbackController: (any PlaybackApplicationControlling)? = nil
+    ) {
         self.detailBrowser = detailBrowser
         self.posterImageLoader = LocalPosterImageLoader()
+        setPlaybackController(playbackController)
+    }
+
+    deinit {
+        playbackStatusTask?.cancel()
+    }
+
+    public func setPlaybackController(_ controller: (any PlaybackApplicationControlling)?) {
+        playbackStatusTask?.cancel()
+        playbackStatusTask = nil
+        playbackController = controller
+        playbackStatus = .idle
+
+        guard let controller else {
+            return
+        }
+
+        playbackStatusTask = Task { [weak self, controller] in
+            for await status in controller.statusStream {
+                guard !Task.isCancelled else {
+                    break
+                }
+
+                await MainActor.run { [weak self] in
+                    self?.playbackStatus = status
+                }
+            }
+        }
     }
 
     public func loadDetail(for id: MediaItemID?) async {

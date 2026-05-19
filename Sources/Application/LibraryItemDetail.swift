@@ -3,6 +3,8 @@ import Foundation
 import Persistence
 
 public struct LibraryFileSummary: Sendable, Equatable {
+    public let mediaFileID: MediaFileID
+    public let isPlayable: Bool
     public let fileName: String
     public let fileExtension: String
     public let fileSizeLabel: String
@@ -179,6 +181,8 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
 
     private func mapFile(_ file: PersistedMediaFileSummary) -> LibraryFileSummary {
         LibraryFileSummary(
+            mediaFileID: file.id,
+            isPlayable: file.isAvailable,
             fileName: file.fileName,
             fileExtension: file.fileExtension,
             fileSizeLabel: fileSizeLabel(file.fileSizeBytes),

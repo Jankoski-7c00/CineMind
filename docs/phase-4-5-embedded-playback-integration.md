@@ -755,7 +755,7 @@ Risks:
 
 ## 4.5D Metal/libmpv Embedded Render Audit (blocking gate)
 
-Status: pending.
+Status: complete.
 
 This is an audit-only task. 4.5D is a blocking gate: no production render
 APIs, implementation tasks, concrete backend integration, concrete view/surface
@@ -830,15 +830,85 @@ Risks:
 - A theoretically available Metal path may be blocked by gpu-next or runtime
   instability.
 
+Audit outcome: C.
+
+Decision:
+
+- Hold production Metal render implementation. The installed libmpv build does
+  not expose a public Metal backend through the libmpv render API.
+- Do not start 4.5E production render implementation until a replacement
+  production render strategy is selected.
+- 4.5A, 4.5B, and 4.5C remain valid and unblocked by this audit outcome
+  because they are Application/Persistence/controller work and do not depend on
+  a concrete render surface.
+- 4.5F may continue only with non-render AppUI/controller work. Concrete render
+  surface injection, render wrapper instantiation, and render lifecycle wiring
+  remain blocked until a replacement production render strategy is selected.
+
+Evidence:
+
+- `pkg-config --modversion mpv` reports `2.5.0`; `mpv --version` reports
+  `mpv v0.41.0`.
+- Installed headers under `/opt/homebrew/Cellar/mpv/0.41.0_4/include/mpv`
+  are `client.h`, `render.h`, `render_gl.h`, and `stream_cb.h`.
+- `render.h` documents supported render API backends as OpenGL and software
+  only, and defines `MPV_RENDER_API_TYPE_OPENGL` and `MPV_RENDER_API_TYPE_SW`.
+  It does not define a Metal render API type, Metal render params, CAMetalLayer
+  or MTL types, or Metal-specific render functions.
+- `render_gl.h` is OpenGL-specific and requires
+  `MPV_RENDER_PARAM_OPENGL_INIT_PARAMS` plus `MPV_RENDER_PARAM_OPENGL_FBO`.
+- `Sources/CLibMPV/module.modulemap` exposes only `mpv/client.h`, so CLibMPV
+  does not currently expose `render.h` or `render_gl.h` constants, structs, or
+  render functions directly.
+- `/opt/homebrew/Cellar/mpv/0.41.0_4/lib/libmpv.2.dylib` exports generic
+  `mpv_render_context_*` symbols, but those are not evidence of a Metal backend.
+- `mpv --no-config --vo=help` lists `gpu-next`, `gpu`, `libmpv`, `null`,
+  `image`, `tct`, and `kitty`.
+- `mpv --no-config --gpu-api=help` lists `vulkan`; GPU contexts include
+  `macvk` and `displayvk`. This indicates this build has Vulkan-on-macOS
+  support, not a public libmpv Metal render API.
+- Current `LibMPVPlayback` has a historical `NSOpenGLView` spike adapter and
+  an embedded runtime mode using `vo=libmpv`; it is not a production Metal
+  render path.
+
+Render coordination finding:
+
+- The generic libmpv render API update callback is notification-only. It must
+  schedule render work and must not call normal mpv APIs.
+- `mpv_render_context_update()` and `mpv_render_context_render()` must run
+  outside the update callback, on a controlled render path.
+- `MPV_RENDER_PARAM_ADVANCED_CONTROL` is strongly recommended by the header,
+  but it makes render-thread rule violations fatal and can deadlock if used
+  incorrectly.
+- Since no public Metal render backend is exposed, no production MTKView,
+  CAMetalLayer, or other Metal draw-loop model can be selected in 4.5D.
+
+Follow-up task:
+
+- Choose a replacement production render strategy before 4.5E:
+  1. use a future or alternate libmpv build that exposes a supported Metal
+     render API;
+  2. investigate a Vulkan/macvk path as a separate explicit audit; or
+  3. accept a non-Metal fallback strategy with revised architecture and
+     validation.
+- Until one of these paths is selected and documented, 4.5E and any
+  render-dependent portion of 4.5F are blocked.
+
 ---
 
 ## 4.5E Implement Chosen Metal Render Path (depends on 4.5D outcome)
 
-Status: pending.
+Status: blocked.
 
 Goal: implement the production embedded render path selected by the 4.5D audit.
 4.5E must not assume MTKView is already the answer, direct Metal render API is
 already available, or the callback model is already known.
+
+4.5D recorded outcome C: the current installed libmpv does not expose a public
+Metal render backend. 4.5E is blocked until a replacement production render
+strategy is selected and documented. Do not implement production render APIs,
+backend render integration, concrete surface wrappers, or render lifecycle code
+under 4.5E while this block remains.
 
 Metal render APIs TBD after audit. Any proposed API shape is subject to audit.
 Do not present concrete Metal render API names as final before 4.5D records an
@@ -940,7 +1010,24 @@ Non-render AppUI playback work may proceed after 4.5C, but it must not assume
 or instantiate a concrete Metal render surface.
 
 Concrete render-surface integration, Metal-backed surface injection, and render
-lifecycle wiring remain blocked pending the 4.5D audit outcome.
+lifecycle wiring remain blocked. 4.5D recorded outcome C, so render-dependent
+4.5F work must not proceed until a replacement production render strategy is
+selected and documented.
+
+Allowed 4.5F work while 4.5E is blocked:
+
+- Play button visibility and action wiring through `LibraryFileSummary.isPlayable`
+  and `LibraryFileSummary.mediaFileID`.
+- Stop button, playback status label, and status observation through
+  `PlaybackApplicationControlling`.
+- View-model/controller wiring that does not import or instantiate
+  `LibMPVPlayback`, `Playback`, `AppKit`, `Metal`, or `MetalKit` in AppUI.
+
+Blocked 4.5F work until a replacement production render strategy is selected:
+
+- Concrete render-surface injection.
+- Metal-backed or other backend-specific surface wrapper instantiation.
+- Render lifecycle wiring between CineMindApp, LibMPVPlayback, and AppUI.
 
 Files expected to change:
 

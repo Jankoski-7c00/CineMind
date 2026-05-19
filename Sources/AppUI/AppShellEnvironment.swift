@@ -7,6 +7,7 @@ public struct AppShellEnvironment {
     public let folderPicker: any LibraryFolderPicking
     public let folderAdder: any LibraryFolderAdding
     public let libraryScanner: any LibraryScanning
+    public let playbackController: (any PlaybackApplicationControlling)?
 
     public init(
         mediaSummaryBrowser: any LibraryMediaSummaryBrowsing,
@@ -14,7 +15,8 @@ public struct AppShellEnvironment {
         folderSummaryBrowser: any LibraryFolderSummaryBrowsing,
         folderPicker: any LibraryFolderPicking,
         folderAdder: any LibraryFolderAdding,
-        libraryScanner: any LibraryScanning
+        libraryScanner: any LibraryScanning,
+        playbackController: (any PlaybackApplicationControlling)? = nil
     ) {
         self.mediaSummaryBrowser = mediaSummaryBrowser
         self.itemDetailBrowser = itemDetailBrowser
@@ -22,5 +24,6 @@ public struct AppShellEnvironment {
         self.folderPicker = folderPicker
         self.folderAdder = folderAdder
         self.libraryScanner = libraryScanner
+        self.playbackController = playbackController
     }
 }

@@ -22,7 +22,9 @@ enum CineMindAppEnvironmentFactory {
             folderSummaryBrowser: folderSummaryBrowser,
             folderPicker: folderPicker,
             folderAdder: folderAdder,
-            libraryScanner: libraryScanner
+            libraryScanner: libraryScanner,
+            // Playback controller remains nil until production render/backend strategy is selected.
+            playbackController: nil
         )
     }
 
