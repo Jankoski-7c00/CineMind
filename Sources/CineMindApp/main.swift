@@ -1,8 +1,11 @@
 import AppUI
+import Application
+import AppKit
 import SwiftUI
 
 struct CineMindApp: App {
     @StateObject private var viewModel = AppShellViewModel()
+    @StateObject private var playbackKeyboardShortcuts = PlaybackKeyboardShortcutMonitor()
     @State private var playbackRuntime: CineMindPlaybackRuntime?
 
     var body: some Scene {
@@ -12,8 +15,28 @@ struct CineMindApp: App {
                 playbackSurface: playbackSurface
             )
                 .task {
+                    activateApplication()
+                    playbackKeyboardShortcuts.install(
+                        togglePlayPause: { togglePlayPause() },
+                        seekRelative: { seekRelative(byMS: $0) }
+                    )
                     startAppIfNeeded()
                 }
+        }
+        .commands {
+            CommandMenu("Playback") {
+                Button("Toggle Play/Pause") {
+                    togglePlayPause()
+                }
+
+                Button("Seek Backward 10 Seconds") {
+                    seekRelative(byMS: -10_000)
+                }
+
+                Button("Seek Forward 10 Seconds") {
+                    seekRelative(byMS: 10_000)
+                }
+            }
         }
     }
 
@@ -25,6 +48,39 @@ struct CineMindApp: App {
         return AnyView(
             PlaybackAVFoundationSurfaceView(backend: playbackRuntime.backend)
         )
+    }
+
+    @MainActor
+    private func activateApplication() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @MainActor
+    private var playbackController: (any PlaybackApplicationControlling)? {
+        playbackRuntime?.controller ?? viewModel.environment?.playbackController
+    }
+
+    @MainActor
+    private func togglePlayPause() {
+        guard let controller = playbackController else {
+            return
+        }
+
+        Task {
+            await controller.togglePlayPause()
+        }
+    }
+
+    @MainActor
+    private func seekRelative(byMS deltaMS: Int) {
+        guard let controller = playbackController else {
+            return
+        }
+
+        Task {
+            await controller.seekRelative(byMS: deltaMS)
+        }
     }
 
     @MainActor

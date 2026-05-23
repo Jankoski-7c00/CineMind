@@ -17,6 +17,39 @@ public enum PosterImageState: Sendable {
     case placeholder(PosterImagePlaceholderReason)
 }
 
+private enum FilePlaybackButtonState {
+    case play
+    case resume
+    case disabled(String)
+
+    var title: String {
+        switch self {
+        case .play:
+            "Play"
+        case .resume:
+            "Resume"
+        case .disabled(let title):
+            title
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .play, .resume:
+            "play.fill"
+        case .disabled:
+            "play.slash"
+        }
+    }
+
+    var isDisabled: Bool {
+        if case .disabled = self {
+            return true
+        }
+        return false
+    }
+}
+
 @MainActor
 public final class LibraryItemDetailViewModel: ObservableObject {
     @Published public private(set) var detail: LibraryItemDetailShell?
@@ -159,6 +192,36 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         }
     }
 
+    public func seek(toMS positionMS: Int) {
+        guard let playbackController else {
+            return
+        }
+
+        Task {
+            await playbackController.seek(toMS: positionMS)
+        }
+    }
+
+    public func seekRelative(byMS deltaMS: Int) {
+        guard let playbackController else {
+            return
+        }
+
+        Task {
+            await playbackController.seekRelative(byMS: deltaMS)
+        }
+    }
+
+    public func togglePlayPause() {
+        guard let playbackController else {
+            return
+        }
+
+        Task {
+            await playbackController.togglePlayPause()
+        }
+    }
+
     private func loadPosterImage(localCachePath: String?, generation: Int) async {
         guard generation == loadingGeneration else { return }
         posterImageState = .loading
@@ -177,6 +240,10 @@ public final class LibraryItemDetailViewModel: ObservableObject {
 public struct LibraryItemDetailView: View {
     @ObservedObject var viewModel: LibraryItemDetailViewModel
     private let playbackSurface: AnyView?
+
+    @State private var isScrubbing = false
+    @State private var scrubPositionMS: Double = 0
+
 
     public init(
         viewModel: LibraryItemDetailViewModel,
@@ -249,7 +316,7 @@ public struct LibraryItemDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                playbackBlock
+                playbackBlock(for: detail)
 
                 Divider()
                 metadataBlock(detail.metadataDetail)
@@ -271,10 +338,8 @@ public struct LibraryItemDetailView: View {
     }
 
     @ViewBuilder
-    private var playbackBlock: some View {
-        if viewModel.playbackStatus.state != .idle {
-            let status = viewModel.playbackStatus
-
+    private func playbackBlock(for detail: LibraryItemDetailShell) -> some View {
+        if let status = playbackStatus(for: detail) {
             VStack(alignment: .leading, spacing: 10) {
                 if let playbackSurface {
                     playbackSurface
@@ -298,9 +363,43 @@ public struct LibraryItemDetailView: View {
                 }
 
                 VStack(spacing: 4) {
-                    ProgressView(value: playbackProgressRatio(status), total: 1.0)
+                    if let durationMS = status.durationMS, durationMS > 0 {
+                        Slider(
+                            value: Binding(
+                                get: {
+                                    isScrubbing
+                                        ? scrubPositionMS
+                                        : Double(status.positionMS)
+                                },
+                                set: { newValue in
+                                    scrubPositionMS = newValue
+                                    if !isScrubbing {
+                                        isScrubbing = true
+                                    }
+                                }
+                            ),
+                            in: 0...Double(durationMS),
+                            onEditingChanged: { editing in
+                                if editing {
+                                    if !isScrubbing {
+                                        scrubPositionMS = Double(status.positionMS)
+                                    }
+                                    isScrubbing = true
+                                } else {
+                                    isScrubbing = false
+                                    viewModel.seek(toMS: Int(scrubPositionMS.rounded()))
+                                }
+                            }
+                        )
+                    } else {
+                        ProgressView(value: playbackProgressRatio(status), total: 1.0)
+                    }
                     HStack {
-                        Text(timeLabel(milliseconds: status.positionMS))
+                        Text(timeLabel(
+                            milliseconds: isScrubbing
+                                ? Int(scrubPositionMS)
+                                : status.positionMS
+                        ))
                         Spacer()
                         Text(playbackDurationLabel(status.durationMS))
                     }
@@ -308,7 +407,32 @@ public struct LibraryItemDetailView: View {
                     .foregroundColor(.secondary)
                 }
             }
+            .onChange(of: status.positionMS) { _, newPositionMS in
+                guard !isScrubbing else { return }
+                scrubPositionMS = Double(newPositionMS)
+            }
+            .onAppear {
+                scrubPositionMS = Double(status.positionMS)
+                isScrubbing = false
+            }
         }
+    }
+
+    private func playbackStatus(for detail: LibraryItemDetailShell) -> PlaybackApplicationStatus? {
+        let status = viewModel.playbackStatus
+        guard status.state != .idle else {
+            return nil
+        }
+
+        guard let activeMediaFileID = status.mediaFileID else {
+            return nil
+        }
+
+        guard detail.files.contains(where: { $0.mediaFileID == activeMediaFileID }) else {
+            return nil
+        }
+
+        return status
     }
 
     @ViewBuilder
@@ -316,20 +440,26 @@ public struct LibraryItemDetailView: View {
         HStack(spacing: 8) {
             switch state {
             case .playing:
+                seekBackwardButton
                 Button {
                     viewModel.pausePlayback()
                 } label: {
                     Label("Pause", systemImage: "pause.fill")
                 }
                 .controlSize(.small)
+
+                seekForwardButton
                 stopPlaybackButton
             case .paused:
+                seekBackwardButton
                 Button {
                     viewModel.resumePlayback()
                 } label: {
                     Label("Resume", systemImage: "play.fill")
                 }
                 .controlSize(.small)
+
+                seekForwardButton
                 stopPlaybackButton
             case .loading, .ready, .buffering, .ended, .failed(_):
                 stopPlaybackButton
@@ -337,6 +467,24 @@ public struct LibraryItemDetailView: View {
                 EmptyView()
             }
         }
+    }
+
+    private var seekBackwardButton: some View {
+        Button {
+            viewModel.seekRelative(byMS: -10_000)
+        } label: {
+            Label("Back 10s", systemImage: "gobackward.10")
+        }
+        .controlSize(.small)
+    }
+
+    private var seekForwardButton: some View {
+        Button {
+            viewModel.seekRelative(byMS: 10_000)
+        } label: {
+            Label("Forward 10s", systemImage: "goforward.10")
+        }
+        .controlSize(.small)
     }
 
     private var stopPlaybackButton: some View {
@@ -562,7 +710,7 @@ public struct LibraryItemDetailView: View {
             Text("Files")
                 .font(.headline)
 
-            ForEach(files, id: \.fileName) { file in
+            ForEach(files, id: \.mediaFileID) { file in
                 HStack {
                     VStack(alignment: .leading) {
                         Text(file.fileName)
@@ -576,13 +724,56 @@ public struct LibraryItemDetailView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     if file.isPlayable {
-                        Button("Play") {
-                            viewModel.playFile(mediaFileID: file.mediaFileID)
+                        let buttonState = filePlaybackButtonState(for: file.mediaFileID)
+                        Button {
+                            performFilePlaybackAction(
+                                buttonState,
+                                mediaFileID: file.mediaFileID
+                            )
+                        } label: {
+                            Label(buttonState.title, systemImage: buttonState.systemImage)
                         }
                         .controlSize(.small)
+                        .disabled(buttonState.isDisabled)
                     }
                 }
             }
+        }
+    }
+
+    private func filePlaybackButtonState(
+        for mediaFileID: MediaFileID
+    ) -> FilePlaybackButtonState {
+        let status = viewModel.playbackStatus
+        guard status.mediaFileID == mediaFileID else {
+            return .play
+        }
+
+        switch status.state {
+        case .idle, .ended, .failed:
+            return .play
+        case .paused:
+            return .resume
+        case .loading, .ready:
+            return .disabled("Starting")
+        case .playing:
+            return .disabled("Playing")
+        case .buffering:
+            return .disabled("Buffering")
+        }
+    }
+
+    private func performFilePlaybackAction(
+        _ buttonState: FilePlaybackButtonState,
+        mediaFileID: MediaFileID
+    ) {
+        switch buttonState {
+        case .play:
+            viewModel.playFile(mediaFileID: mediaFileID)
+        case .resume:
+            viewModel.resumePlayback()
+        case .disabled:
+            break
         }
     }
 

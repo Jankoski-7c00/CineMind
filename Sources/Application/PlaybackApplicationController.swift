@@ -48,7 +48,10 @@ public protocol PlaybackApplicationControlling: Sendable {
     func open(mediaFileID: MediaFileID) async
     func pause() async
     func resume() async
+    func togglePlayPause() async
     func stop() async
+    func seek(toMS positionMS: Int) async
+    func seekRelative(byMS deltaMS: Int) async
 }
 
 public actor PlaybackApplicationController: PlaybackApplicationControlling {
@@ -68,6 +71,7 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
     private var progressSessionOpen = false
     private var didAutoPlayActiveSession = false
     private var lastEmittedStatus: PlaybackApplicationStatus?
+    private var suppressedCoordinatorIdleEventCount = 0
 
     public init(
         coordinator: PlaybackCoordinator,
@@ -89,14 +93,18 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
     public func open(mediaFileID: MediaFileID) async {
         startEventLoopIfNeeded()
 
-        if activeMediaFileID != nil || progressSessionOpen {
-            await stop()
+        if activeMediaFileID == mediaFileID, activeSessionShouldIgnoreRepeatedOpen {
+            return
         }
 
         let playableFile: PlayableFile
         do {
             playableFile = try mediaOpening.open(mediaFileID: mediaFileID)
         } catch {
+            guard !activeSessionShouldIgnoreRepeatedOpen else {
+                return
+            }
+
             resetActiveSession()
             emitStatus(
                 PlaybackApplicationStatus(
@@ -108,6 +116,10 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
                 )
             )
             return
+        }
+
+        if activeMediaFileID != nil || progressSessionOpen {
+            await stop()
         }
 
         activeMediaFileID = playableFile.mediaFileID
@@ -131,6 +143,9 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
     public func stop() async {
         startEventLoopIfNeeded()
 
+        if activeMediaFileID != nil || progressSessionOpen {
+            suppressedCoordinatorIdleEventCount += 1
+        }
         await coordinator.stop()
         await closeProgressSessionIfOpen()
         resetActiveSession()
@@ -157,6 +172,60 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         await coordinator.play()
     }
 
+    public func togglePlayPause() async {
+        switch currentState {
+        case .playing:
+            await pause()
+        case .paused:
+            await resume()
+        case .idle, .loading, .ready, .buffering, .ended, .failed:
+            return
+        }
+    }
+
+    public func seek(toMS positionMS: Int) async {
+        startEventLoopIfNeeded()
+
+        guard validSeekState else {
+            return
+        }
+
+        let clampedPositionMS = clampSeekPosition(positionMS)
+        await progressCoordinator.noteSeekRequested()
+        await coordinator.seek(toMS: clampedPositionMS)
+    }
+
+    public func seekRelative(byMS deltaMS: Int) async {
+        let targetMS = currentPositionMS + deltaMS
+        await seek(toMS: targetMS)
+    }
+
+    private var validSeekState: Bool {
+        switch currentState {
+        case .ready, .playing, .paused, .buffering:
+            return true
+        case .idle, .loading, .ended, .failed:
+            return false
+        }
+    }
+
+    private var activeSessionShouldIgnoreRepeatedOpen: Bool {
+        switch currentState {
+        case .loading, .ready, .playing, .paused, .buffering:
+            return true
+        case .idle, .ended, .failed:
+            return false
+        }
+    }
+
+    private func clampSeekPosition(_ positionMS: Int) -> Int {
+        let lowerBound = max(0, positionMS)
+        if let durationMS = currentDurationMS, durationMS > 0 {
+            return min(lowerBound, durationMS)
+        }
+        return lowerBound
+    }
+
     private func startEventLoopIfNeeded() {
         guard eventTask == nil else {
             return
@@ -175,6 +244,10 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
 
     private func handleCoordinatorEvent(_ event: PlaybackEvent) async {
         if case .tracksDiscovered = event {
+            return
+        }
+
+        if shouldSuppressCoordinatorEvent(event) {
             return
         }
 
@@ -239,6 +312,16 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
             currentState = .failed("Playback failed.")
             emitCurrentStatus()
         }
+    }
+
+    private func shouldSuppressCoordinatorEvent(_ event: PlaybackEvent) -> Bool {
+        guard case .stateChanged(.idle) = event,
+              suppressedCoordinatorIdleEventCount > 0 else {
+            return false
+        }
+
+        suppressedCoordinatorIdleEventCount -= 1
+        return true
     }
 
     private func handleProgressEvent(_ event: PlaybackEvent) async {

@@ -161,6 +161,49 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         )
     }
 
+    func testTogglePlayPauseWhilePlayingForwardsPauseCommand() async throws {
+        let file = try makeApplicationPlayableFile("toggle-pause")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.togglePlayPause()
+        await fixture.backend.waitForCommandCount(3)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .pause],
+            backend: fixture.backend
+        )
+    }
+
+    func testTogglePlayPauseWhilePausedForwardsPlayCommand() async throws {
+        let file = try makeApplicationPlayableFile("toggle-resume")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        await fixture.controller.pause()
+        fixture.backend.emit(.stateChanged(.paused))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.togglePlayPause()
+        await fixture.backend.waitForCommandCount(4)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .pause, .play],
+            backend: fixture.backend
+        )
+    }
+
+    func testTogglePlayPauseWhileIdleIsNoOp() async throws {
+        let fixture = makeFixture(files: [:])
+        let statuses = PlaybackStatusReader(fixture.controller.statusStream)
+
+        await fixture.controller.togglePlayPause()
+
+        await assertCommands([], backend: fixture.backend)
+        try await assertNoStatus(statuses)
+    }
+
     func testPauseResumeInIdleAreNoOps() async throws {
         let fixture = makeFixture(files: [:])
         let statuses = PlaybackStatusReader(fixture.controller.statusStream)
@@ -256,6 +299,24 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         XCTAssertEqual(fixture.progressStore.operations, [])
     }
 
+    func testOpenFailureWhileActivePlaybackPreservesCurrentSession() async throws {
+        let file = try makeApplicationPlayableFile("preserve-current-on-open-failure")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.open(mediaFileID: "missing-next-file")
+
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play],
+            backend: fixture.backend
+        )
+        XCTAssertEqual(fixture.mediaOpening.calls, [file.mediaFileID, "missing-next-file"])
+        XCTAssertEqual(fixture.progressStore.saveCalls, [])
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+    }
+
     func testPlaybackFailureProducesUserSafeFailure() async throws {
         let file = try makeApplicationPlayableFile("failure")
         let fixture = makeFixture(files: [file])
@@ -346,6 +407,81 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         XCTAssertEqual(fixture.mediaOpening.calls, [first.mediaFileID, second.mediaFileID])
     }
 
+    func testOpeningNextMediaWhilePlayingKeepsNextSessionActive() async throws {
+        let first = try makeApplicationPlayableFile("playing-first")
+        let second = try makeApplicationPlayableFile("playing-second")
+        let fixture = makeFixture(files: [first, second])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: first, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.open(mediaFileID: second.mediaFileID)
+
+        try await assertNextStatus(.idle, statuses: &statuses)
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .loading,
+                mediaFileID: second.mediaFileID,
+                displayName: second.displayName,
+                positionMS: 0,
+                durationMS: nil
+            ),
+            statuses: &statuses
+        )
+
+        fixture.backend.emit(.stateChanged(.ready))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .ready,
+                mediaFileID: second.mediaFileID,
+                displayName: second.displayName,
+                positionMS: 0,
+                durationMS: nil
+            ),
+            statuses: &statuses
+        )
+        await fixture.backend.waitForCommandCount(5)
+        await assertCommands(
+            [
+                .load(playbackPlayableFile(from: first)),
+                .play,
+                .stop,
+                .load(playbackPlayableFile(from: second)),
+                .play
+            ],
+            backend: fixture.backend
+        )
+
+        fixture.backend.emit(.stateChanged(.playing))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: second.mediaFileID,
+                displayName: second.displayName,
+                positionMS: 0,
+                durationMS: nil
+            ),
+            statuses: &statuses
+        )
+    }
+
+    func testRepeatedOpenForActiveMediaFileIsNoOp() async throws {
+        let file = try makeApplicationPlayableFile("repeat-open")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play],
+            backend: fixture.backend
+        )
+        XCTAssertEqual(fixture.mediaOpening.calls, [file.mediaFileID])
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+    }
+
     func testTrackDiscoveryDoesNotEmitApplicationStatus() async throws {
         let file = try makeApplicationPlayableFile("tracks")
         let fixture = makeFixture(files: [file])
@@ -385,6 +521,267 @@ final class PlaybackApplicationControllerTests: XCTestCase {
                 durationMS: nil
             ),
             statuses: &statuses
+        )
+    }
+
+    // MARK: - Seek
+
+    func testSeekToValidPositionForwardsCommand() async throws {
+        let file = try makeApplicationPlayableFile("seek-forward")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.seek(toMS: 30_000)
+        await fixture.backend.waitForCommandCount(3)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .seek(30_000)],
+            backend: fixture.backend
+        )
+    }
+
+    func testSeekWhileReadyForwardsCommand() async throws {
+        let file = try makeApplicationPlayableFile("seek-ready")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses)
+        fixture.backend.emit(.stateChanged(.ready))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.seek(toMS: 30_000)
+        await fixture.backend.waitForCommandCount(3)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .seek(30_000)],
+            backend: fixture.backend
+        )
+    }
+
+    func testSeekWhilePausedForwardsCommand() async throws {
+        let file = try makeApplicationPlayableFile("seek-paused")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        await fixture.controller.pause()
+        fixture.backend.emit(.stateChanged(.paused))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.seek(toMS: 30_000)
+        await fixture.backend.waitForCommandCount(4)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .pause, .seek(30_000)],
+            backend: fixture.backend
+        )
+    }
+
+    func testSeekWhileBufferingForwardsCommand() async throws {
+        let file = try makeApplicationPlayableFile("seek-buffering")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        fixture.backend.emit(.stateChanged(.buffering))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.seek(toMS: 30_000)
+        await fixture.backend.waitForCommandCount(3)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .seek(30_000)],
+            backend: fixture.backend
+        )
+    }
+
+    func testSeekClampsNegativeToZero() async throws {
+        let file = try makeApplicationPlayableFile("seek-negative")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.seek(toMS: -5_000)
+        await fixture.backend.waitForCommandCount(3)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .seek(0)],
+            backend: fixture.backend
+        )
+    }
+
+    func testSeekClampsPastDuration() async throws {
+        let file = try makeApplicationPlayableFile("seek-past-duration")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses)
+        fixture.backend.emit(.stateChanged(.ready))
+        try await discardNextStatus(statuses: &statuses)
+        await fixture.backend.waitForCommandCount(2)
+        fixture.backend.emit(.stateChanged(.playing))
+        try await discardNextStatus(statuses: &statuses)
+        fixture.backend.emit(.durationUpdated(durationMS: 120_000))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.seek(toMS: 200_000)
+        await fixture.backend.waitForCommandCount(3)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .seek(120_000)],
+            backend: fixture.backend
+        )
+    }
+
+    func testSeekDoesNotEmitNewPositionBeforeBackendPositionUpdate() async throws {
+        let file = try makeApplicationPlayableFile("seek-no-optimistic-status")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        fixture.backend.emit(.positionUpdated(positionMS: 15_000))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.seek(toMS: 30_000)
+        fixture.backend.emit(.durationUpdated(durationMS: 120_000))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 15_000,
+                durationMS: 120_000
+            ),
+            statuses: &statuses
+        )
+
+        fixture.backend.emit(.positionUpdated(positionMS: 30_000))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 30_000,
+                durationMS: 120_000
+            ),
+            statuses: &statuses
+        )
+    }
+
+    func testSeekIdleIsNoOp() async throws {
+        let fixture = makeFixture(files: [:])
+        let statuses = PlaybackStatusReader(fixture.controller.statusStream)
+
+        await fixture.controller.seek(toMS: 30_000)
+
+        await assertCommands([], backend: fixture.backend)
+        try await assertNoStatus(statuses)
+    }
+
+    func testSeekLoadingIsNoOp() async throws {
+        let file = try makeApplicationPlayableFile("seek-loading")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.seek(toMS: 30_000)
+
+        await assertCommands([.load(playbackPlayableFile(from: file))], backend: fixture.backend)
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+    }
+
+    func testSeekFailedIsNoOp() async throws {
+        let file = try makeApplicationPlayableFile("seek-failed")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses)
+        fixture.backend.emit(.playbackFailed(.mpvError("boom")))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.seek(toMS: 30_000)
+
+        await assertCommands([.load(playbackPlayableFile(from: file))], backend: fixture.backend)
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+    }
+
+    func testSeekEndedIsNoOp() async throws {
+        let file = try makeApplicationPlayableFile("seek-ended")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses)
+        fixture.backend.emit(.stateChanged(.ready))
+        try await discardNextStatus(statuses: &statuses)
+        await fixture.backend.waitForCommandCount(2)
+        fixture.backend.emit(.stateChanged(.playing))
+        try await discardNextStatus(statuses: &statuses)
+        fixture.backend.emit(.playbackEnded(finalPositionMS: 120_000, durationMS: 120_000))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.seek(toMS: 50_000)
+
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play],
+            backend: fixture.backend
+        )
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+    }
+
+    func testSeekRelativeForwardsAbsolutePosition() async throws {
+        let file = try makeApplicationPlayableFile("seek-relative")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        fixture.backend.emit(.positionUpdated(positionMS: 15_000))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.seekRelative(byMS: 5_000)
+        await fixture.backend.waitForCommandCount(3)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .seek(20_000)],
+            backend: fixture.backend
+        )
+    }
+
+    func testSeekRelativeClampsToZero() async throws {
+        let file = try makeApplicationPlayableFile("seek-relative-clamp")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.seekRelative(byMS: -100_000)
+        await fixture.backend.waitForCommandCount(3)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .seek(0)],
+            backend: fixture.backend
+        )
+    }
+
+    func testSeekCallsNoteSeekRequested() async throws {
+        let file = try makeApplicationPlayableFile("seek-note")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        fixture.backend.emit(.positionUpdated(positionMS: 15_000))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.seek(toMS: 30_000)
+        await fixture.backend.waitForCommandCount(3)
+
+        fixture.backend.emit(.positionUpdated(positionMS: 30_000))
+        try await discardNextStatus(statuses: &statuses)
+
+        let savePositions = fixture.progressStore.saveCalls.map(\.positionMS)
+        XCTAssertTrue(
+            savePositions.contains(30_000),
+            "Expected save at position 30_000 after seek, got saves at \(savePositions)"
         )
     }
 
