@@ -47,7 +47,7 @@ final class CineMindPlaybackSurfaceSpike: NSObject, NSApplicationDelegate, NSWin
     func applicationDidFinishLaunching(_ notification: Notification) {
         let openGLView = makeOpenGLView()
         openGLView.renderAfterSurfaceChange = { [weak self] in
-            self?.backend?.renderSpikeSurfaceNow()
+            self?.backend?.renderSurfaceNow()
         }
 
         let window = NSWindow(
@@ -99,7 +99,8 @@ final class CineMindPlaybackSurfaceSpike: NSObject, NSApplicationDelegate, NSWin
     @MainActor
     private func startPlayback(using openGLView: NSOpenGLView) {
         do {
-            let backend = try LibMPVPlaybackBackend(spikeOpenGLView: openGLView)
+            let backend = try LibMPVPlaybackBackend(mode: .embedded)
+            try backend.attachRenderSurface(openGLView)
             let coordinator = PlaybackCoordinator(backend: backend)
             self.backend = backend
             self.coordinator = coordinator
@@ -112,7 +113,7 @@ final class CineMindPlaybackSurfaceSpike: NSObject, NSApplicationDelegate, NSWin
 
                 do {
                     print("Preparing embedded render surface")
-                    try await backend.prepareSpikeRenderSurface()
+                    try await backend.prepareRenderSurface()
                     print("Opening file through PlaybackCoordinator: \(self.filePath)")
                     await coordinator.open(self.playableFile)
                 } catch {

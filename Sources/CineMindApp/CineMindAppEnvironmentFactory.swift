@@ -1,11 +1,43 @@
 import AppUI
 import Application
 import Foundation
+import LibMPVPlayback
+import Playback
 import Persistence
 import Scanner
 
+struct CineMindAppStartupEnvironment {
+    let appShellEnvironment: AppShellEnvironment
+    let playbackRuntime: CineMindPlaybackRuntime?
+}
+
+final class CineMindPlaybackRuntime {
+    let backend: LibMPVPlaybackBackend
+    let coordinator: PlaybackCoordinator
+    let progressCoordinator: PlaybackProgressCoordinator
+    let controller: PlaybackApplicationController
+
+    init(
+        backend: LibMPVPlaybackBackend,
+        coordinator: PlaybackCoordinator,
+        progressCoordinator: PlaybackProgressCoordinator,
+        controller: PlaybackApplicationController
+    ) {
+        self.backend = backend
+        self.coordinator = coordinator
+        self.progressCoordinator = progressCoordinator
+        self.controller = controller
+    }
+
+    deinit {
+        Task { [coordinator] in
+            await coordinator.shutdown()
+        }
+    }
+}
+
 enum CineMindAppEnvironmentFactory {
-    static func start() throws -> AppShellEnvironment {
+    static func start() throws -> CineMindAppStartupEnvironment {
         let databaseURL = try databaseURL()
         let store = try CineMindStore(path: databaseURL.path)
         _ = try store.ensureLibrary(name: "CineMind Library")
@@ -16,16 +48,46 @@ enum CineMindAppEnvironmentFactory {
         let folderAdder = AddLibraryFolderUseCase(store: store)
         let scanRunner = ScannerLibraryScanRunner(scanner: LibraryScanner(store: store))
         let libraryScanner = RunLibraryScanUseCase(store: store, runner: scanRunner)
-        return AppShellEnvironment(
+
+        let playbackRuntime = makePlaybackRuntime(store: store)
+        let appShellEnvironment = AppShellEnvironment(
             mediaSummaryBrowser: mediaSummaryBrowser,
             itemDetailBrowser: itemDetailBrowser,
             folderSummaryBrowser: folderSummaryBrowser,
             folderPicker: folderPicker,
             folderAdder: folderAdder,
             libraryScanner: libraryScanner,
-            // Playback controller remains nil until production render/backend strategy is selected.
-            playbackController: nil
+            playbackController: playbackRuntime?.controller
         )
+
+        return CineMindAppStartupEnvironment(
+            appShellEnvironment: appShellEnvironment,
+            playbackRuntime: playbackRuntime
+        )
+    }
+
+    private static func makePlaybackRuntime(store: CineMindStore) -> CineMindPlaybackRuntime? {
+        do {
+            let backend = try LibMPVPlaybackBackend(mode: .embedded)
+            let coordinator = PlaybackCoordinator(backend: backend)
+            let progressCoordinator = PlaybackProgressCoordinator(
+                progressUseCase: PlaybackProgressUseCase(store: store)
+            )
+            let controller = PlaybackApplicationController(
+                coordinator: coordinator,
+                progressCoordinator: progressCoordinator,
+                mediaOpening: OpenMediaUseCase(store: store)
+            )
+            return CineMindPlaybackRuntime(
+                backend: backend,
+                coordinator: coordinator,
+                progressCoordinator: progressCoordinator,
+                controller: controller
+            )
+        } catch {
+            writeWarning("Playback runtime unavailable: \(error)")
+            return nil
+        }
     }
 
     private static func databaseURL() throws -> URL {
@@ -83,4 +145,8 @@ enum CineMindAppEnvironmentFactory {
     private enum StartupError: Error {
         case applicationSupportDirectoryUnavailable
     }
+}
+
+private func writeWarning(_ message: String) {
+    FileHandle.standardError.write(Data(("Warning: " + message + "\n").utf8))
 }

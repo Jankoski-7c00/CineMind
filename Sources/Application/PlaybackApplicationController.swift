@@ -67,7 +67,7 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
     private var didAutoPlayActiveSession = false
     private var lastEmittedStatus: PlaybackApplicationStatus?
 
-    init(
+    public init(
         coordinator: PlaybackCoordinator,
         progressCoordinator: PlaybackProgressCoordinator,
         mediaOpening: any MediaOpening

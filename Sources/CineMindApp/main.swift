@@ -3,6 +3,7 @@ import SwiftUI
 
 struct CineMindApp: App {
     @StateObject private var viewModel = AppShellViewModel()
+    @State private var playbackRuntime: CineMindPlaybackRuntime?
 
     var body: some Scene {
         WindowGroup {
@@ -22,8 +23,9 @@ struct CineMindApp: App {
         viewModel.markLoading()
 
         do {
-            let environment = try CineMindAppEnvironmentFactory.start()
-            viewModel.markReady(environment: environment)
+            let startup = try CineMindAppEnvironmentFactory.start()
+            playbackRuntime = startup.playbackRuntime
+            viewModel.markReady(environment: startup.appShellEnvironment)
         } catch {
             viewModel.markFailed(
                 CineMindAppEnvironmentFactory.startupFailureMessage(for: error)

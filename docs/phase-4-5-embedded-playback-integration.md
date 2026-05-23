@@ -4,19 +4,23 @@ Canonical file: `docs/phase-4-5-embedded-playback-integration.md`
 
 Phase 4.5 brings embedded libmpv playback into the real app while preserving Playback module purity.
 
-Metal is the intended production direction, but no concrete render API,
-view/surface type, callback model, or backend integration path is considered
-committed until the Metal/libmpv audit gate records an outcome.
+Direct Metal remains the intended long-term production direction, but the
+current libmpv build does not expose a public direct Metal render API. Phase
+4.5 therefore accepts a temporary OpenGL embedded fallback through the libmpv
+render API.
 
-No unqualified production-plan OpenGL references are allowed. OpenGL may be
-mentioned only as explicitly labeled historical spike context or audit notes.
+OpenGL references are allowed only in explicitly accepted temporary fallback
+sections, historical spike notes, and LibMPVPlayback/CineMindApp implementation
+sections for the fallback. Long-term work must replace this fallback with a
+supported Metal or Vulkan embedded renderer.
 
 ---
 
 # 1. Goal
 
 Integrate embedded libmpv playback into the app using the proven Phase 2.1
-playback path and a production render path selected by the Metal/libmpv audit:
+playback path and the temporary OpenGL embedded fallback accepted after the
+Metal/libmpv and Vulkan/macvk audits:
 
 ```text
 selected media file (isPlayable == true, with Play button)
@@ -34,13 +38,13 @@ selected media file (isPlayable == true, with Play button)
 
 Implement:
 
-- Blocking Metal/libmpv render audit before production render implementation.
-- Production playback render surface API in LibMPVPlayback only after the audit
-  records the selected implementation path.
-- Deferred embedded surface attachment if the audit confirms it is supported by
-  the selected Metal/libmpv model.
-- SwiftUI/AppKit bridge around an audit-approved Metal-backed render surface,
-  owned in CineMindApp, not AppUI.
+- Blocking Metal/libmpv and Vulkan/macvk render audits before production render
+  implementation.
+- Temporary production playback render surface API in LibMPVPlayback using the
+  libmpv OpenGL render API.
+- Deferred embedded backend creation and OpenGL surface attachment.
+- SwiftUI/AppKit bridge around an `NSOpenGLView` render surface, owned in
+  CineMindApp, not AppUI.
 - `PlaybackApplicationController` in Application layer.
 - Minimal open/stop lifecycle from the detail page.
 - Embedded video display in the detail view.
@@ -66,9 +70,9 @@ Do not implement:
 - PiP
 - fullscreen polish
 - alternate playback engine
-- concrete Metal render API names before the audit records an outcome
-- concrete Metal surface type before the audit records an outcome
-- concrete render callback model before the audit records an outcome
+- direct Metal render implementation
+- Vulkan/macvk external-window integration
+- treating the OpenGL fallback as the long-term renderer
 - raw mpv calls from AppUI
 - elaborate progress/resume UX (progress fanout wired, UX deferred to 4.6)
 - any metadata, scanner, or poster work
@@ -83,8 +87,8 @@ LibMPVPlayback owns:
 
 - raw mpv symbols
 - render context
-- Metal integration details selected by the 4.5D audit
-- render adapter/backend integration selected by the 4.5D audit
+- temporary OpenGL render integration for Phase 4.5
+- future Metal/Vulkan embedded render replacement details when available
 - update callback handling
 
 Application owns:
@@ -108,13 +112,15 @@ CineMindApp wires:
 - concrete `LibMPVPlaybackBackend`
 - concrete store
 - playback controller dependencies
-- concrete SwiftUI/AppKit/Metal-backed render wrapper selected after 4.5D
-  (imports `LibMPVPlayback`; may import `Metal`/`MetalKit`)
+- concrete SwiftUI/AppKit/OpenGL render wrapper for Phase 4.5
+  (imports `LibMPVPlayback`; may import `AppKit`)
 
 Boundary rules:
 
-- Metal / MetalKit imports are allowed only in CineMindApp implementation code
-  and/or LibMPVPlayback implementation code.
+- AppKit/OpenGL render wrapper code is allowed only in CineMindApp
+  implementation code and/or LibMPVPlayback implementation code.
+- Metal / MetalKit imports remain reserved for a future supported embedded
+  renderer and are not part of the temporary OpenGL fallback.
 - AppUI must not import `Playback`, `LibMPVPlayback`, `AppKit`, `Metal`,
   `MetalKit`, `Persistence`, `Metadata`, or `Scanner`.
 - AppUI must not call raw `mpv_` APIs.
@@ -132,15 +138,16 @@ These rules are mandatory for every task that touches playback lifecycle.
 
 1. Create `PlaybackProgressUseCase` (Persistence-backed).
 2. Create `PlaybackProgressCoordinator` (progress use case).
-3. Create `LibMPVPlaybackBackend` in the deferred embedded mode selected by
-   the 4.5D audit (no render surface yet).
+3. Create `LibMPVPlaybackBackend` in deferred embedded OpenGL mode
+   (no render surface yet).
 4. Create `PlaybackCoordinator` (backend).
 5. Create `PlaybackApplicationController` (coordinator, progress coordinator, mediaOpening).
-6. SwiftUI render wrapper appears -> audit-approved Metal-backed surface is created.
-7. Backend render-surface attachment happens only when the selected surface,
-   device/layer/drawable prerequisites, and libmpv render params are available.
-8. Render context preparation follows the callback/draw-loop model selected by
-   the 4.5D audit.
+6. SwiftUI render wrapper appears -> CineMindApp creates the temporary
+   `NSOpenGLView` surface.
+7. Backend render-surface attachment happens only when the `NSOpenGLView`,
+   OpenGL context, and libmpv OpenGL render params are available.
+8. Render context preparation follows the libmpv OpenGL render callback model
+   validated by the existing spike and productionized in 4.5E.
 
 ## Teardown order
 
@@ -150,8 +157,8 @@ These rules are mandatory for every task that touches playback lifecycle.
 4. Shutdown coordinator (`coordinator.shutdown()`).
 5. Shutdown backend (`backend.shutdown()`).
    - Inside backend: clear update callback, free render context, stop event loop, destroy mpv runtime.
-6. Release render surface, device/layer/drawable, and AppKit view references
-   in the order required by the selected Metal path.
+6. Release render context, OpenGL surface/context, and AppKit view references
+   in the order required by the temporary OpenGL fallback.
 7. Release backend/coordinator references.
 
 ## Render callback rule
@@ -161,14 +168,13 @@ These rules are mandatory for every task that touches playback lifecycle.
 - It uses a lock to avoid duplicate scheduling.
 - After `shutdown()` begins, scheduled renders are no-ops.
 
-## Metal render coordination rule
+## Temporary OpenGL Render Coordination Rule
 
-- `MTKView` drawable lifecycle may require rendering through
-  `MTKViewDelegate` draw callbacks.
-- `CAMetalLayer`/manual redraw may require a different render loop.
 - mpv render callbacks may only schedule redraw work.
-- Do not assume OpenGL-style "callback -> render immediately" semantics.
-- Callback/draw-loop coordination is an audit item.
+- The fallback may render through the `NSOpenGLView` draw path only after
+  render context preparation succeeds.
+- Callback/draw-loop coordination must be productionized from the existing
+  spike, with shutdown guards around scheduled renders.
 - Controls remain outside the render view.
 
 ---
@@ -177,10 +183,12 @@ These rules are mandatory for every task that touches playback lifecycle.
 
 LibMPVPlayback:
 
-- Complete the 4.5D Metal/libmpv audit before adding production render APIs.
-- Add production embedded render APIs only after the audit records outcome A
-  or after outcome B prerequisites are complete.
-- Keep Metal render APIs TBD after audit; do not pre-lock API names in this plan.
+- Use the libmpv OpenGL render API as the temporary embedded Phase 4.5
+  production path.
+- Rename historical spike APIs to production names.
+- Support deferred embedded backend creation and render surface attachment.
+- Keep raw mpv and render API calls isolated in LibMPVPlayback.
+- Keep direct Metal/Vulkan embedded APIs out of Phase 4.5.
 - Preserve historical spike target compatibility unless a later accepted task
   explicitly supersedes it.
 
@@ -214,9 +222,8 @@ AppUI:
 CineMindApp:
 
 - Wire playback concrete dependencies.
-- Add the concrete SwiftUI/AppKit/Metal-backed bridge after 4.5D selects the
-  implementation path. File name and concrete implementation type are TBD after
-  audit.
+- Add the concrete SwiftUI/AppKit/OpenGL bridge for the temporary Phase 4.5
+  fallback. Keep `NSOpenGLView` usage inside CineMindApp/LibMPVPlayback.
 - Add `Playback` and `LibMPVPlayback` as target dependencies.
 - Inject render view into detail page.
 
@@ -241,10 +248,8 @@ No play/pause toggle in 4.5. Once open, the controller auto-plays. Stop is the o
 # 8. Risks
 
 - SwiftUI may recreate representable views unexpectedly.
-- Metal integration may require additional CLibMPV bindings.
-- The selected Metal path may require `gpu-next` or a different mpv render mode.
-- MTKView drawable lifecycle may differ from callback-triggered render timing.
-- CAMetalLayer/manual redraw may require a different render loop.
+- The temporary OpenGL fallback uses deprecated macOS technology.
+- The fallback must be isolated so replacement with Metal/Vulkan is tractable.
 - Render callbacks can race with teardown.
 - Existing `PlaybackCoordinator.events` is single-consumer.
 - `PlaybackApplicationController.statusStream` is single-consumer for 4.5 (no fanout abstraction).
@@ -255,9 +260,9 @@ Mitigation:
 
 - Keep render view identity stable (use `.id()` if needed).
 - Keep playback event consumption centralized in the playback application controller.
-- Treat the Metal-backed render surface as an isolated implementation detail.
-- Record the 4.5D audit outcome before choosing any production render API,
-  surface type, callback model, or backend integration path.
+- Treat the temporary OpenGL render surface as an isolated implementation
+  detail in LibMPVPlayback/CineMindApp.
+- Record that OpenGL is a temporary fallback, not the long-term render strategy.
 - Guard scheduled renders after shutdown begins.
 - Document `statusStream` as single-consumer; add fanout only if 4.6 proves it necessary.
 - Gate CineMindApp mpv runtime with the existing `MPVEmbeddedRenderAvailabilityProbe` so the app can launch without mpv and surface a clear error instead of crashing.
@@ -273,12 +278,15 @@ Automated:
 - Application tests for controller state transitions with fake backend/open media/progress.
 - Forbidden import grep on AppUI includes playback, infrastructure, AppKit,
   Metal, and MetalKit imports.
-- Documentation grep confirms no unqualified production-plan OpenGL references.
+- Documentation grep confirms OpenGL references appear only in explicitly
+  accepted temporary fallback sections, historical spike notes, and
+  LibMPVPlayback/CineMindApp implementation sections.
+- Persistence migrations remain untouched.
 
 Manual:
 
 - Open an available media file from detail via Play button.
-- Video renders inside the app through the render path selected by 4.5D/4.5E.
+- Video renders inside the app through the temporary OpenGL embedded fallback.
 - Resize window.
 - Move window between displays if available.
 - Stop playback.
@@ -836,14 +844,15 @@ Decision:
 
 - Hold production Metal render implementation. The installed libmpv build does
   not expose a public Metal backend through the libmpv render API.
-- Do not start 4.5E production render implementation until a replacement
-  production render strategy is selected.
+- At the time of this audit, do not start 4.5E production render implementation
+  until a replacement production render strategy is selected. The later 4.5D
+  follow-up decision selects temporary OpenGL for Phase 4.5.
 - 4.5A, 4.5B, and 4.5C remain valid and unblocked by this audit outcome
   because they are Application/Persistence/controller work and do not depend on
   a concrete render surface.
-- 4.5F may continue only with non-render AppUI/controller work. Concrete render
-  surface injection, render wrapper instantiation, and render lifecycle wiring
-  remain blocked until a replacement production render strategy is selected.
+- At the time of this audit, 4.5F may continue only with non-render
+  AppUI/controller work. The later 4.5D follow-up decision unblocks render
+  surface work only through the temporary OpenGL fallback after 4.5E.
 
 Evidence:
 
@@ -891,84 +900,309 @@ Follow-up task:
   2. investigate a Vulkan/macvk path as a separate explicit audit; or
   3. accept a non-Metal fallback strategy with revised architecture and
      validation.
-- Until one of these paths is selected and documented, 4.5E and any
-  render-dependent portion of 4.5F are blocked.
+- The later 4.5D follow-up decision selects a temporary OpenGL embedded
+  fallback for Phase 4.5. Direct Metal replacement work remains blocked until
+  selected, documented, and proven by an isolated direct-Metal spike.
 
 ---
 
-## 4.5E Implement Chosen Metal Render Path (depends on 4.5D outcome)
+## 4.5D-MetalEnablement Direct Metal API Route (docs/research outcome)
 
-Status: blocked.
+Status: complete.
 
-Goal: implement the production embedded render path selected by the 4.5D audit.
-4.5E must not assume MTKView is already the answer, direct Metal render API is
-already available, or the callback model is already known.
+Goal: define what would have to change for CineMind to support a direct
+Metal-backed embedded libmpv render path after 4.5D outcome C.
 
-4.5D recorded outcome C: the current installed libmpv does not expose a public
-Metal render backend. 4.5E is blocked until a replacement production render
-strategy is selected and documented. Do not implement production render APIs,
-backend render integration, concrete surface wrappers, or render lifecycle code
-under 4.5E while this block remains.
+Decision:
 
-Metal render APIs TBD after audit. Any proposed API shape is subject to audit.
-Do not present concrete Metal render API names as final before 4.5D records an
-outcome.
+- Direct Metal remains blocked. The current installed mpv and current upstream
+  public libmpv headers do not expose a stable, released direct Metal render API.
+- The only verified "Metal" route in the current installed mpv is
+  Vulkan-on-macOS through `macvk`/MoltenVK. This is not a direct Metal libmpv
+  render API and must not be implemented unless separately approved.
+- At the time of this direct-Metal audit, OpenGL was not approved as a fallback
+  for the direct-Metal route. The later 4.5D follow-up decision explicitly
+  supersedes that stop condition for Phase 4.5 only.
+- Direct Metal implementation remains blocked until an isolated direct-Metal
+  spike renders visible video and validates teardown outside `CineMindApp`.
 
-Possible implementation outcomes:
+### Metal enablement decision tree
 
-- **A. Direct libmpv Metal render path.** Implement an audit-approved
-  Metal-backed surface type. The surface type is TBD after audit and may be
-  MTKView, a CAMetalLayer wrapper, or another audit-approved approach.
-- **B. Metal render API supported but CLibMPV incomplete.** Extend bindings
-  first, then implement the render path.
-- **C. Metal unsupported in current libmpv/runtime.** Hold production render
-  work. The existing OpenGL spike remains historical validation only.
-- **D. Metal path theoretically available but unstable/incomplete.** Block
-  production render implementation pending resolution, including gpu-next
-  instability or runtime instability.
+1. If a released or upstream public mpv header exposes a direct Metal libmpv
+   render API, record the exact verified header, constants, types, functions,
+   required init params, render target params, threading rules, and minimum mpv
+   version before naming the API as final.
+2. If only an unmerged fork, draft PR, or patchset exposes the required route,
+   decide whether CineMind will vendor or custom-build mpv before any CineMind
+   source integration.
+3. If the available macOS route is only Vulkan through `macvk`/MoltenVK, stop.
+   Do not implement Vulkan/macvk under this phase without separate approval.
+4. If no direct Metal route is verified, keep direct Metal replacement work
+   blocked. Phase 4.5 may still proceed only through the later explicit OpenGL
+   fallback decision.
 
-If the audit outcome is B, C, or D, production render implementation must not
-proceed until the required prerequisite or resolution is complete.
+### Evidence
 
-Files expected to change only after a qualifying 4.5D outcome:
+Local installed mpv evidence:
 
-- A CineMindApp Metal-backed render surface wrapper (file name and concrete
-  implementation type TBD after audit)
+- `pkg-config --modversion mpv` reports `2.5.0`; `mpv --version` reports
+  `mpv v0.41.0`.
+- Installed headers under `/opt/homebrew/Cellar/mpv/0.41.0_4/include/mpv`
+  expose `client.h`, `render.h`, `render_gl.h`, and `stream_cb.h`.
+- Local `render.h` lists OpenGL and software render API support, with no Metal,
+  MTL, CAMetalLayer, or direct Metal render params.
+- `mpv --no-config --gpu-api=help` lists `vulkan`; `mpv --no-config
+  --gpu-context=help` lists `macvk` as `mac/Vulkan (via Metal)` plus
+  `displayvk`.
+- `/opt/homebrew/Cellar/mpv/0.41.0_4/lib/libmpv.2.dylib` links Metal and
+  Vulkan-related frameworks/libraries, but exported `mpv_render_context_*`
+  symbols are generic and do not prove a public direct Metal render API.
+
+Upstream public API evidence:
+
+- Upstream `include/mpv/render.h` documents supported libmpv render API
+  backends as OpenGL and software and does not expose a direct Metal backend.
+- Upstream `include/mpv/render_gl.h` is OpenGL-specific and does not define
+  Metal surface or drawable integration.
+- The public mpv manual documents GPU APIs such as OpenGL, Vulkan, and D3D11;
+  it does not document a stable public direct Metal libmpv render API.
+
+Future/unmerged PR evidence:
+
+- mpv PR #16818 (`vo_libmpv: introduce 'gpu-next' render backend`) is a draft
+  unmerged PR, not a stable released direct Metal API.
+- PR #16818 is not sufficient to unblock 4.5E. Its initial described backend is
+  selected through a future libmpv render-backend parameter and initially wraps
+  OpenGL; it does not provide a verified direct Metal public API for CineMind.
+- Any future `gpu-next` or custom libmpv render API names must remain
+  uncommitted until verified from the exact header/build used by the spike.
+
+### Required audits and commands
+
+Run these before any source changes:
+
+```sh
+pkg-config --modversion mpv
+pkg-config --cflags --libs mpv
+mpv --version
+rg -n "Metal|METAL|MTL|CAMetal|MPV_RENDER_API_TYPE|MPV_RENDER_PARAM" /opt/homebrew/Cellar/mpv/*/include/mpv
+mpv --no-config --vo=help
+mpv --no-config --gpu-api=help
+mpv --no-config --gpu-context=help
+nm -gU /opt/homebrew/Cellar/mpv/*/lib/libmpv.2.dylib | rg "mpv_render_context|metal|vulkan"
+otool -L /opt/homebrew/Cellar/mpv/*/lib/libmpv.2.dylib
+curl -L https://raw.githubusercontent.com/mpv-player/mpv/master/include/mpv/render.h | rg -n "Supported backends|MPV_RENDER_API_TYPE|MPV_RENDER_PARAM|Metal|METAL|MTL|CAMetal"
+curl -L https://raw.githubusercontent.com/mpv-player/mpv/master/include/mpv/render_gl.h | sed -n '1,160p'
+curl -L https://github.com/mpv-player/mpv/pull/16818.patch | rg -n "MPV_RENDER_PARAM_BACKEND|gpu-next|Metal|Vulkan|D3D11|api_name"
+```
+
+If a candidate direct Metal patch exists, build and inspect it outside the
+CineMind tree first:
+
+```sh
+cd /private/tmp
+# clone/build candidate mpv source here
+# inspect installed headers and dylib before changing CineMind
+```
+
+### Candidate implementation branches
+
+- **A. Official direct Metal API exists.** Extend `CLibMPV` to expose verified
+  render headers, add a narrow `LibMPVPlayback` direct-Metal adapter, add the
+  needed Apple framework links/rpaths, and keep `AppUI` untouched.
+- **B. Direct Metal exists only in a fork/patch.** Decide on vendoring or a
+  custom mpv build first, then prove the custom build with the isolated spike.
+- **C. Only Vulkan/macvk is available.** Stop. Create a separate
+  Vulkan/macvk/MoltenVK plan only if explicitly approved.
+- **D. No viable direct Metal route.** Record the evidence. Direct Metal
+  implementation remains blocked; the later 4.5D follow-up decision accepts a
+  temporary OpenGL fallback for Phase 4.5 only.
+
+### Binding, package, and runtime requirements
+
+- `CLibMPV` would need to expose `mpv/render.h` and any verified backend-specific
+  direct Metal header. If Swift cannot import required C/Objective-C/Metal
+  shapes safely, add only a minimal C shim after API verification.
+- A custom mpv route would require replacing the Homebrew-only assumption with a
+  pinned include/lib/pkg-config source, explicit linker/rpath strategy, and
+  packaging notes for local development and CI.
+- `Package.swift` would need target-specific framework/linker settings only
+  after the spike verifies the actual API and libraries. Direct Metal
+  replacement work must not add dependencies until the exact route is verified.
+- Runtime availability must probe the actual loaded `libmpv` path/version,
+  required render symbols, Metal device availability, and a real
+  `mpv_render_context_create` call with the verified direct Metal params.
+  Version checks alone are insufficient.
+
+### Minimal spike
+
+Before touching `CineMindApp`, build an isolated app or command target outside
+the CineMind source tree that:
+
+- creates a Metal device and render surface using the verified direct Metal API;
+- creates the libmpv render context before playback starts;
+- schedules redraw work from the mpv update callback without calling normal mpv
+  APIs inside that callback;
+- renders visible video, handles resize, and reports swap/display timing if the
+  verified API requires it;
+- validates teardown by stopping playback, freeing the render context, releasing
+  surface/device/layer references, and exiting without deadlock or crash.
+
+### Stop conditions
+
+- Stop if the audited route is Vulkan/macvk/MoltenVK rather than direct Metal.
+- Stop if the only evidence is PR #16818 or another unmerged/draft patch without
+  a custom-build decision.
+- Stop if the spike cannot render visible video.
+- Stop if teardown deadlocks, crashes, leaks the render context, or requires
+  AppUI changes.
+- Stop if the route requires OpenGL fallback.
+- Stop if final API names cannot be verified from the exact headers used by the
+  spike.
+
+### Risk matrix
+
+| Risk | Impact | Mitigation / stop |
+|---|---:|---|
+| No public direct Metal API exists | High | Keep direct Metal replacement blocked |
+| Candidate API is unmerged or unstable | High | Require custom build decision and spike |
+| Only Vulkan/macvk is available | High | Stop unless separately approved |
+| Custom mpv breaks packaging, rpath, or CI | High | Decide vendoring/build strategy before source integration |
+| Swift cannot import required C/Objective-C/Metal types | Medium | Add a minimal C shim after API verification |
+| Render callback or teardown deadlocks | High | Spike must validate callback scheduling and teardown |
+| AppUI boundary drift | Medium | Keep render work in `CineMindApp`/`LibMPVPlayback`; never import Metal/libmpv in `AppUI` |
+
+### New tasks
+
+- **4.5D.1 Metal API source audit:** verify released, upstream, PR, fork, and
+  local Homebrew sources for a public direct Metal libmpv render API. Do not
+  record final API names unless they are present in verified headers.
+- **4.5D.2 CLibMPV binding extension or custom mpv build decision:** decide
+  whether Homebrew mpv is sufficient, whether bindings only need more headers,
+  or whether CineMind needs a custom/vendored mpv.
+- **4.5D.3 Minimal Metal render spike:** build and run an isolated direct Metal
+  libmpv proof before touching `CineMindApp`.
+- **Post-4.5 direct Metal replacement:** unblock direct Metal replacement work
+  only after an isolated spike proves direct Metal visible playback, runtime
+  probing, and teardown.
+
+---
+
+## 4.5D Follow-up Decision: Temporary OpenGL Embedded Fallback
+
+Status: complete.
+
+Decision:
+
+- Use the libmpv OpenGL render API as the temporary embedded production path
+  for Phase 4.5.
+
+Rationale:
+
+- Direct Metal is blocked because the current libmpv build exposes no public
+  direct Metal render API.
+- Vulkan/macvk works locally, but source review and local behavior show it is
+  an mpv-managed external-window path, not an embedded AppKit/SwiftUI surface.
+- The OpenGL/libmpv render API path is available and historically validated by
+  the existing Phase 2.1 embedded `NSOpenGLView` spike.
+
+Constraints:
+
+- The OpenGL fallback is temporary and isolated to `LibMPVPlayback` plus the
+  CineMindApp render bridge.
+- `NSOpenGLView`, OpenGL context handling, and raw libmpv render API calls must
+  not leak into AppUI, Application, Domain, or Persistence.
+- AppUI still must not import `Playback`, `LibMPVPlayback`, `AppKit`, `Metal`,
+  `MetalKit`, `Persistence`, `Metadata`, `Scanner`, or raw mpv APIs.
+- Long-term direction remains replacing OpenGL with a supported Metal or Vulkan
+  embedded renderer.
+
+Implications:
+
+- 4.5E is unblocked under the temporary OpenGL fallback scope.
+- 4.5F render-surface injection may proceed only after 4.5E provides the
+  backend/controller/render surface wiring.
+- The direct-Metal and Vulkan/macvk audits remain valid historical evidence, but
+  their previous 4.5E blocker is superseded by this explicit fallback decision.
+
+Future tech debt:
+
+- **Post-4.5:** replace temporary OpenGL embedded fallback with a supported
+  Metal/Vulkan embedded renderer.
+
+---
+
+## 4.5E Implement Temporary OpenGL Embedded Render Fallback
+
+Status: pending.
+
+Goal: productionize the existing OpenGL/libmpv embedded spike as the temporary
+Phase 4.5 render path while preserving Playback and AppUI boundaries.
+
+Scope:
+
+- Productionize the existing OpenGL spike.
+- Rename spike APIs to production names.
+- Support deferred embedded backend creation and surface attachment.
+- Use `NSOpenGLView` only inside CineMindApp/LibMPVPlayback.
+- Keep raw mpv/render API calls isolated in LibMPVPlayback.
+- Keep AppUI render-technology agnostic.
+
+Files expected to change:
+
+- `Sources/LibMPVPlayback/LibMPVPlayback.swift`
+- `Sources/LibMPVPlayback/MPVRuntime.swift`
+- `Sources/LibMPVPlayback/MPVOpenGLRenderAdapter.swift`
+- A CineMindApp SwiftUI/AppKit render bridge wrapping `NSOpenGLView`
+  (file name TBD during implementation)
 - `Sources/CineMindApp/CineMindAppEnvironmentFactory.swift`
-- `Sources/AppUI/AppShellEnvironment.swift`
-- `Package.swift`
-- LibMPVPlayback render adapter/runtime files selected by the audit
+- `Sources/AppUI/AppShellEnvironment.swift` only for abstract playback surface
+  and Application-facing controller injection, not render technology
+- `Package.swift` only if needed to wire `CineMindApp` to `LibMPVPlayback`
+
+Implementation approach:
+
+1. Add production embedded backend initialization that creates an mpv runtime in
+   `vo=libmpv` mode without requiring the render surface at construction time.
+2. Rename spike-only APIs such as `spikeOpenGLView`,
+   `prepareSpikeRenderSurface`, and `renderSpikeSurfaceNow` to production names.
+3. Add explicit surface attach/detach or prepare/shutdown calls for the
+   `NSOpenGLView` render surface.
+4. Keep the render adapter private to LibMPVPlayback and keep raw
+   `mpv_render_context_*` handling out of CineMindApp/AppUI.
+5. Let CineMindApp own the SwiftUI/AppKit bridge and pass only abstract surface
+   content into AppUI.
+6. Preserve the existing shell/spike targets unless the implementation task
+   explicitly supersedes them.
 
 Expected composition shape:
 
-- CineMindApp owns the SwiftUI/AppKit bridge and any `Metal`/`MetalKit` imports
-  required by the selected surface.
-- LibMPVPlayback owns raw mpv render context, Metal integration details, and
-  render callback handling.
-- AppUI receives only an abstract playback surface container and controller
-  protocol. AppUI does not know whether the concrete surface is MTKView,
-  CAMetalLayer-backed, or another selected implementation.
+- CineMindApp owns the SwiftUI/AppKit bridge and any `NSOpenGLView` usage.
+- LibMPVPlayback owns raw mpv render context, OpenGL render params, update
+  callback handling, render scheduling, and teardown.
+- AppUI receives only an abstract playback surface slot and Application-facing
+  controller/status APIs. AppUI does not know that the temporary renderer is
+  OpenGL.
 
 Lifecycle requirements:
 
-- MTKView drawable lifecycle may require rendering through MTKViewDelegate draw
-  callbacks.
-- CAMetalLayer/manual redraw may require a different render loop.
-- mpv render callbacks may only schedule redraw work.
-- Do not assume OpenGL-style "callback -> render immediately" semantics.
-- Callback/draw-loop coordination is an audit item and must follow the 4.5D
-  decision.
-- Teardown must stop playback before freeing render context, surface, device,
-  layer, or drawable references.
+- The backend can be constructed before the render surface exists.
+- Surface attachment happens when the SwiftUI/AppKit bridge creates the
+  `NSOpenGLView` and its OpenGL context is available.
+- mpv update callbacks may only schedule redraw work.
+- Scheduled renders must become no-ops after shutdown starts.
+- Teardown must stop playback, clear update callbacks, free render context, stop
+  the event loop, destroy mpv runtime, and then release OpenGL/AppKit surface
+  references.
 
 Non-goals:
 
-- No AppUI boundary growth beyond abstract playback surface injection and
-  Application-facing controller/status wiring.
+- No direct Metal implementation.
+- No Vulkan/macvk external-window implementation.
+- No AppUI imports of playback backend, AppKit, OpenGL, Metal, MetalKit,
+  Persistence, Metadata, Scanner, or raw mpv APIs.
 - No full playback controls (play/pause/seek/scrubber/track menus are 4.6).
-- No metadata, scanner, or poster work.
-- No production render implementation when audit outcome B, C, or D still has
-  unresolved prerequisites.
+- No metadata, scanner, poster, or migration work.
 
 Validation commands:
 
@@ -978,25 +1212,29 @@ swift build --target CineMindPlaybackSurfaceSpike   # historical spike still bui
 swift build --target CineMindPlaybackShell           # still builds
 rg "import.*(Playback|LibMPVPlayback|AppKit|Metal|MetalKit|Persistence|Metadata|Scanner)" Sources/AppUI
 rg "mpv_" Sources/AppUI
+git diff -- Sources/Persistence/Migrations.swift
 ```
 
 Rollback scope:
 
-- Remove the selected CineMindApp render surface wrapper.
+- Remove the CineMindApp OpenGL render surface wrapper.
 - Remove render wiring from `CineMindAppEnvironmentFactory`.
 - Remove playback render injection from AppUI composition.
 - Revert `Package.swift` CineMindApp dependencies if they were added by this task.
-- Revert selected LibMPVPlayback render adapter/runtime changes.
+- Revert LibMPVPlayback production OpenGL render adapter/runtime changes.
 
 Risks:
 
 - **CineMindApp newly depends on `LibMPVPlayback` and `CLibMPV`.** Previously,
-  only `CineMindPlaybackShell` and `CineMindPlaybackSurfaceSpike` had this dependency.
-  `LibMPVPlayback` links `libmpv.dylib` via `CLibMPV` (Homebrew mpv), so
-  `swift build --target CineMindApp` may require `libmpv.dylib` at link time.
+  only `CineMindPlaybackShell` and `CineMindPlaybackSurfaceSpike` had this
+  dependency. `LibMPVPlayback` links `libmpv.dylib` via `CLibMPV` (Homebrew
+  mpv), so `swift build --target CineMindApp` may require `libmpv.dylib` at
+  link time.
+- `NSOpenGLView` is deprecated on macOS; this is accepted only as a temporary
+  Phase 4.5 fallback.
 - `NSViewRepresentable` identity must be stable across SwiftUI redraws.
 - The backend reference may be shared between the controller and render surface;
-  teardown order must follow the selected render path.
+  teardown order must follow the temporary OpenGL render path.
 
 ---
 
@@ -1006,35 +1244,33 @@ Status: pending.
 
 Goal: Add Play button on available file rows, Stop button, playback status label,
 and controller/view-model wiring through the Application controller protocol.
-Non-render AppUI playback work may proceed after 4.5C, but it must not assume
-or instantiate a concrete Metal render surface.
+AppUI playback work may proceed only after 4.5E provides backend/controller and
+render surface wiring.
 
-Concrete render-surface integration, Metal-backed surface injection, and render
-lifecycle wiring remain blocked. 4.5D recorded outcome C, so render-dependent
-4.5F work must not proceed until a replacement production render strategy is
-selected and documented.
-
-Allowed 4.5F work while 4.5E is blocked:
+Allowed 4.5F work after 4.5E:
 
 - Play button visibility and action wiring through `LibraryFileSummary.isPlayable`
   and `LibraryFileSummary.mediaFileID`.
 - Stop button, playback status label, and status observation through
   `PlaybackApplicationControlling`.
+- Abstract playback surface placement supplied by CineMindApp.
 - View-model/controller wiring that does not import or instantiate
-  `LibMPVPlayback`, `Playback`, `AppKit`, `Metal`, or `MetalKit` in AppUI.
+  `LibMPVPlayback`, `Playback`, `AppKit`, `Metal`, `MetalKit`, or OpenGL APIs
+  in AppUI.
 
-Blocked 4.5F work until a replacement production render strategy is selected:
+Blocked in AppUI:
 
-- Concrete render-surface injection.
-- Metal-backed or other backend-specific surface wrapper instantiation.
-- Render lifecycle wiring between CineMindApp, LibMPVPlayback, and AppUI.
+- Concrete render-surface construction.
+- `NSOpenGLView`, AppKit, raw OpenGL, Metal, Vulkan, or LibMPVPlayback imports.
+- Raw mpv/render API calls.
 
 Files expected to change:
 
 - `Sources/AppUI/LibraryItemDetailView.swift`
 - `Sources/AppUI/LibraryItemDetailViewModel.swift` (extend, or new playback-aware VM)
 - `Sources/CineMindApp/ContentView.swift` (or layout file that composes the detail view),
-  only for abstract wiring that does not instantiate a concrete render surface before 4.5D/4.5E
+  for passing the abstract playback surface and Application-facing controller
+  into AppUI
 
 Exact APIs (in AppUI):
 
@@ -1149,7 +1385,8 @@ if let playbackSurface, playbackStatus.state != .idle {
 }
 ```
 
-CineMindApp wiring after 4.5E selects a render path (in ContentView or equivalent):
+CineMindApp wiring after 4.5E provides the temporary OpenGL render bridge
+(in ContentView or equivalent):
 
 ```swift
 // In the split view where detail is constructed:
@@ -1161,14 +1398,14 @@ LibraryItemDetailView(
 
 // Where playbackSurfaceView is:
 func playbackSurfaceView() -> AnyView? {
-    // Concrete render surface wrapper is TBD after 4.5D.
-    // Do not instantiate a Metal-backed surface before the audit outcome allows it.
+    // Concrete OpenGL wrapper is owned by CineMindApp/LibMPVPlayback.
+    // AppUI receives only AnyView and remains render-technology agnostic.
 }
 ```
 
 The playback backend is held by the composition root and may be passed to both
-the controller (for commands) and the selected render wrapper (for surface
-display) only after 4.5D/4.5E allow concrete render integration.
+the controller (for commands) and the temporary OpenGL render wrapper (for
+surface display) only after 4.5E creates the wiring.
 
 Non-goals:
 
@@ -1178,8 +1415,10 @@ Non-goals:
 - No metadata, scanner, or poster changes.
 - No AppUI boundary growth beyond `playbackSurface: AnyView?`.
 - No `AppShellEnvironment` growth beyond `playbackController`.
-- No concrete Metal render surface instantiation in AppUI.
-- No assumptions about MTKView, CAMetalLayer, or any selected render surface type.
+- No concrete OpenGL, Metal, Vulkan, AppKit, or backend-specific render surface
+  instantiation in AppUI.
+- No assumptions about `NSOpenGLView`, MTKView, CAMetalLayer, or any selected
+  render surface type.
 
 Validation commands:
 
@@ -1248,7 +1487,7 @@ Manual validation checklist:
 | 8 | Tap Play on a file from an unavailable folder | Play button should not appear (or if it does, graceful error) |
 | 9 | Item with no files | No file rows; no Play buttons |
 | 10 | Relaunch app after playing a file | App starts normally |
-| 11 | Validate selected render path from 4.5D/4.5E | Rendering follows the audited callback/draw-loop model |
+| 11 | Validate temporary OpenGL render fallback from 4.5E | Rendering follows the productionized libmpv OpenGL callback/draw-loop model |
 
 Automated validation commands:
 
@@ -1264,13 +1503,17 @@ rg "NSOpenGLView|OpenGL|prepareSpikeRenderSurface|renderSpikeSurfaceNow|spikeOpe
 rg "import.*(Playback|LibMPVPlayback|AppKit|Metal|MetalKit|Persistence|Metadata|Scanner)" Sources/AppUI  # empty
 rg "mpv_" Sources/AppUI                                      # empty (no raw mpv calls)
 rg "availabilityLabel\s*==\s*\"available\"" Sources/AppUI     # empty (no string comparison)
+git diff -- Sources/Persistence/Migrations.swift              # empty
 ```
 
 Documentation grep expectation:
 
-- Matches may exist only in explicitly labeled historical spike sections or
-  audit notes.
-- There must be no unqualified production-plan OpenGL references.
+- OpenGL matches may exist only in explicitly accepted temporary fallback
+  sections, historical spike notes, and LibMPVPlayback/CineMindApp
+  implementation sections.
+- Spike-only API names such as `prepareSpikeRenderSurface`,
+  `renderSpikeSurfaceNow`, and `spikeOpenGLView` must remain historical only,
+  or be removed after production API renaming.
 
 Acceptance gate:
 
@@ -1280,7 +1523,9 @@ Acceptance gate:
   `LibMPVPlayback`, `AppKit`, `Metal`, `MetalKit`, `Persistence`, `Metadata`,
   `Scanner`.
 - No raw `mpv_` calls in AppUI.
-- No unqualified production-plan OpenGL references in this doc.
+- OpenGL references are limited to explicitly accepted temporary fallback
+  sections, historical spike notes, and LibMPVPlayback/CineMindApp
+  implementation sections.
 - No `availabilityLabel == "available"` string comparisons in AppUI.
 - Play button visibility is gated on `LibraryFileSummary.isPlayable`.
 - No metadata, scanner, or poster changes introduced.
@@ -1311,8 +1556,8 @@ Risks:
 - Manual validation requires a library with seeded media files. Use the
   existing shell tools or add-folder UI to prepare test data.
 - mpv.log may produce console noise. This is expected and not a 4.5 concern.
-- The existing OpenGL spike remains historical validation only, not the
-  production target.
+- The existing OpenGL spike is historical validation, but 4.5E must
+  productionize and rename the relevant APIs before app integration.
 
 ---
 
@@ -1322,10 +1567,10 @@ Risks:
 4.5A (direct file lookup)  ──┐
 4.5B (file IDs in DTO)    ──┤
                               ├──► 4.5C (controller facade) ──┐
-                                                              ├──► 4.5F non-render controls/status
                                                               │
-4.5D (Metal/libmpv audit gate) ──► 4.5E (chosen render path) ─┤
-                                                              ├──► 4.5F render-surface injection
+4.5D (render audits) ──► 4.5D follow-up OpenGL decision ──► 4.5E (temporary OpenGL fallback)
+                                                              │
+                                                              ├──► 4.5F AppUI controls/status/surface slot
                                                               │
                                                               ▼
                                                          4.5G (validation)
@@ -1336,23 +1581,24 @@ Unblocked now:
 - 4.5A Direct media file lookup.
 - 4.5B LibraryFileSummary DTO changes.
 - 4.5C PlaybackApplicationController after 4.5A + 4.5B.
+- 4.5E temporary OpenGL embedded fallback after the recorded 4.5D follow-up
+  decision.
 
-Partially unblocked:
+Blocked until 4.5E wiring exists:
 
-- 4.5F AppUI playback control/status work may proceed after 4.5C for Play
-  button, Stop button, playback status label, and controller/view-model wiring.
-- Non-render AppUI playback work must not assume or instantiate a concrete
-  Metal render surface.
+- 4.5F Play button, Stop button, playback status, and abstract render surface
+  placement.
 
-Still blocked pending 4.5D outcome:
+Still blocked after 4.5:
 
-- Concrete render-surface integration.
-- Metal-backed surface injection.
-- Render lifecycle wiring.
+- Direct Metal implementation.
+- Vulkan/macvk embedded implementation. The audited macvk route is
+  mpv-managed external-window only.
+- Replacement of the temporary OpenGL fallback with a supported Metal/Vulkan
+  embedded renderer.
 
 4.5D is an audit-only blocking gate for production render work.
 4.5C depends on 4.5A + 4.5B.
-4.5E depends on the recorded 4.5D audit outcome and any prerequisite required
-by that outcome.
+4.5E depends on the recorded 4.5D follow-up decision accepting temporary OpenGL.
 4.5F render-surface injection depends on 4.5E.
-4.5G must validate whichever render path is chosen by 4.5D/4.5E.
+4.5G must validate the temporary OpenGL fallback and boundary constraints.

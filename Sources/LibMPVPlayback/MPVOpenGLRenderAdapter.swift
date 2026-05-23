@@ -32,7 +32,7 @@ private struct MPVOpenGLFBO {
     var internal_format: Int32
 }
 
-// Spike-only adapter for rendering libmpv into an AppKit-owned NSOpenGLView.
+// Adapter for rendering libmpv into an AppKit-owned NSOpenGLView.
 final class MPVOpenGLRenderAdapter: @unchecked Sendable {
     private weak var openGLView: NSOpenGLView?
     private let runtime: MPVRuntime
@@ -60,15 +60,15 @@ final class MPVOpenGLRenderAdapter: @unchecked Sendable {
         }
 
         guard !readShuttingDown() else {
-            throw PlaybackError.invalidState("spike render surface has already shut down")
+            throw PlaybackError.invalidState("render surface has already shut down")
         }
 
         guard !isPreparing else {
-            throw PlaybackError.invalidState("spike render surface preparation is already in progress")
+            throw PlaybackError.invalidState("render surface preparation is already in progress")
         }
 
         guard let openGLView, let openGLContext = openGLView.openGLContext else {
-            throw PlaybackError.mpvError("spike render surface is missing an OpenGL context")
+            throw PlaybackError.mpvError("render surface is missing an OpenGL context")
         }
 
         isPreparing = true
@@ -153,7 +153,7 @@ final class MPVOpenGLRenderAdapter: @unchecked Sendable {
 
         if result < 0, !hasLoggedRenderError {
             hasLoggedRenderError = true
-            print("Spike render failed: mpv_render_context_render returned \(result)")
+            print("Render surface render failed: mpv_render_context_render returned \(result)")
         }
 
         openGLContext.flushBuffer()

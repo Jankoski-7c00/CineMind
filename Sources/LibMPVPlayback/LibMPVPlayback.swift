@@ -7,26 +7,45 @@ public enum LibMPVPlaybackModule {
     public static let playbackModule = PlaybackModule.self
 }
 
+public enum LibMPVPlaybackBackendMode: Sendable {
+    case standalone
+    case embedded
+}
+
 public final class LibMPVPlaybackBackend: PlaybackBackend, @unchecked Sendable {
     private let eventHub = PlaybackEventHub()
     private let runtime: MPVRuntime
-    private let renderAdapter: MPVOpenGLRenderAdapter?
+    private let lock = NSLock()
+    private var renderAdapter: MPVOpenGLRenderAdapter?
     private let eventLoopTask: Task<Void, Never>
+    private var isShuttingDown = false
 
     public var events: AsyncStream<PlaybackEvent> {
         eventHub.makeStream()
     }
 
     public convenience init() throws {
-        let runtime = try MPVRuntime()
+        try self.init(mode: .standalone)
+    }
+
+    public convenience init(mode: LibMPVPlaybackBackendMode) throws {
+        let runtimeMode: MPVRuntimeMode
+        switch mode {
+        case .standalone:
+            runtimeMode = .standalone
+        case .embedded:
+            runtimeMode = .embedded
+        }
+
+        let runtime = try MPVRuntime(mode: runtimeMode)
         self.init(runtime: runtime, renderAdapter: nil)
     }
 
+    @available(*, deprecated, message: "Use init(mode: .embedded), attachRenderSurface(_:), and prepareRenderSurface().")
     @MainActor
     public convenience init(spikeOpenGLView: NSOpenGLView) throws {
-        let runtime = try MPVRuntime(mode: .embedded)
-        let renderAdapter = MPVOpenGLRenderAdapter(openGLView: spikeOpenGLView, runtime: runtime)
-        self.init(runtime: runtime, renderAdapter: renderAdapter)
+        try self.init(mode: .embedded)
+        try attachRenderSurface(spikeOpenGLView)
     }
 
     private init(runtime: MPVRuntime, renderAdapter: MPVOpenGLRenderAdapter?) {
@@ -49,17 +68,50 @@ public final class LibMPVPlaybackBackend: PlaybackBackend, @unchecked Sendable {
     }
 
     @MainActor
-    public func prepareSpikeRenderSurface() async throws {
+    public func attachRenderSurface(_ openGLView: NSOpenGLView) throws {
+        guard !readShuttingDown() else {
+            throw PlaybackError.invalidState("playback backend has shut down")
+        }
+
+        guard renderAdapter == nil else {
+            throw PlaybackError.invalidState("render surface is already attached")
+        }
+
+        renderAdapter = MPVOpenGLRenderAdapter(openGLView: openGLView, runtime: runtime)
+    }
+
+    @MainActor
+    public func prepareRenderSurface() async throws {
+        guard !readShuttingDown() else {
+            throw PlaybackError.invalidState("playback backend has shut down")
+        }
+
         guard let renderAdapter else {
-            throw PlaybackError.invalidState("spike render surface is not configured")
+            throw PlaybackError.invalidState("render surface is not attached")
         }
 
         try await renderAdapter.prepare()
     }
 
     @MainActor
-    public func renderSpikeSurfaceNow() {
+    public func renderSurfaceNow() {
+        guard !readShuttingDown() else {
+            return
+        }
+
         renderAdapter?.renderNow()
+    }
+
+    @available(*, deprecated, message: "Use prepareRenderSurface().")
+    @MainActor
+    public func prepareSpikeRenderSurface() async throws {
+        try await prepareRenderSurface()
+    }
+
+    @available(*, deprecated, message: "Use renderSurfaceNow().")
+    @MainActor
+    public func renderSpikeSurfaceNow() {
+        renderSurfaceNow()
     }
 
     public func load(playableFile: PlayableFile) async throws {
@@ -95,12 +147,44 @@ public final class LibMPVPlaybackBackend: PlaybackBackend, @unchecked Sendable {
     }
 
     public func shutdown() async {
+        guard markShuttingDownIfNeeded() else {
+            return
+        }
+
+        let renderAdapter = await MainActor.run {
+            let adapter = self.renderAdapter
+            self.renderAdapter = nil
+            return adapter
+        }
+
         await renderAdapter?.shutdown()
         await runtime.stopEventLoop()
         eventLoopTask.cancel()
         await eventLoopTask.value
         await runtime.destroy()
         eventHub.finish()
+    }
+
+    private func markShuttingDownIfNeeded() -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+
+        guard !isShuttingDown else {
+            return false
+        }
+
+        isShuttingDown = true
+        return true
+    }
+
+    private func readShuttingDown() -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return isShuttingDown
     }
 }
 
