@@ -1,5 +1,0 @@
-module CLibMPV [system] {
-    header "mpv/client.h"
-    link "mpv"
-    export *
-}

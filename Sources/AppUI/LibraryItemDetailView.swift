@@ -139,6 +139,26 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         }
     }
 
+    public func pausePlayback() {
+        guard let playbackController else {
+            return
+        }
+
+        Task {
+            await playbackController.pause()
+        }
+    }
+
+    public func resumePlayback() {
+        guard let playbackController else {
+            return
+        }
+
+        Task {
+            await playbackController.resume()
+        }
+    }
+
     private func loadPosterImage(localCachePath: String?, generation: Int) async {
         guard generation == loadingGeneration else { return }
         posterImageState = .loading
@@ -253,7 +273,9 @@ public struct LibraryItemDetailView: View {
     @ViewBuilder
     private var playbackBlock: some View {
         if viewModel.playbackStatus.state != .idle {
-            VStack(alignment: .leading, spacing: 8) {
+            let status = viewModel.playbackStatus
+
+            VStack(alignment: .leading, spacing: 10) {
                 if let playbackSurface {
                     playbackSurface
                         .id("playback-surface")
@@ -267,17 +289,63 @@ public struct LibraryItemDetailView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Playback")
                             .font(.headline)
-                        Text(playbackStatusLabel(viewModel.playbackStatus))
+                        Text(playbackStatusLabel(status))
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    Button("Stop") {
-                        viewModel.stopPlayback()
+                    playbackControls(for: status.state)
+                }
+
+                VStack(spacing: 4) {
+                    ProgressView(value: playbackProgressRatio(status), total: 1.0)
+                    HStack {
+                        Text(timeLabel(milliseconds: status.positionMS))
+                        Spacer()
+                        Text(playbackDurationLabel(status.durationMS))
                     }
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func playbackControls(for state: PlaybackApplicationState) -> some View {
+        HStack(spacing: 8) {
+            switch state {
+            case .playing:
+                Button {
+                    viewModel.pausePlayback()
+                } label: {
+                    Label("Pause", systemImage: "pause.fill")
+                }
+                .controlSize(.small)
+                stopPlaybackButton
+            case .paused:
+                Button {
+                    viewModel.resumePlayback()
+                } label: {
+                    Label("Resume", systemImage: "play.fill")
+                }
+                .controlSize(.small)
+                stopPlaybackButton
+            case .loading, .ready, .buffering, .ended, .failed(_):
+                stopPlaybackButton
+            case .idle:
+                EmptyView()
+            }
+        }
+    }
+
+    private var stopPlaybackButton: some View {
+        Button {
+            viewModel.stopPlayback()
+        } label: {
+            Label("Stop", systemImage: "stop.fill")
+        }
+        .controlSize(.small)
     }
 
     private func posterPanel(
@@ -525,9 +593,6 @@ public struct LibraryItemDetailView: View {
         if let displayName = status.displayName, !displayName.isEmpty {
             parts.append(displayName)
         }
-        if let timeLabel = playbackTimeLabel(status) {
-            parts.append(timeLabel)
-        }
         return parts.joined(separator: " - ")
     }
 
@@ -552,15 +617,21 @@ public struct LibraryItemDetailView: View {
         }
     }
 
-    private func playbackTimeLabel(_ status: PlaybackApplicationStatus) -> String? {
-        if let durationMS = status.durationMS {
-            return "\(timeLabel(milliseconds: status.positionMS)) / \(timeLabel(milliseconds: durationMS))"
+    private func playbackDurationLabel(_ durationMS: Int?) -> String {
+        guard let durationMS, durationMS > 0 else {
+            return "--:--"
         }
 
-        guard status.positionMS > 0 else {
-            return nil
+        return timeLabel(milliseconds: durationMS)
+    }
+
+    private func playbackProgressRatio(_ status: PlaybackApplicationStatus) -> Double {
+        guard let durationMS = status.durationMS, durationMS > 0 else {
+            return 0
         }
-        return timeLabel(milliseconds: status.positionMS)
+
+        let progress = Double(status.positionMS) / Double(durationMS)
+        return min(max(progress, 0), 1)
     }
 
     private func timeLabel(milliseconds: Int) -> String {

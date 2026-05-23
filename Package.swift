@@ -15,12 +15,11 @@ let package = Package(
         .library(name: "Scanner", targets: ["Scanner"]),
         .library(name: "Application", targets: ["Application"]),
         .library(name: "Playback", targets: ["Playback"]),
-        .library(name: "LibMPVPlayback", targets: ["LibMPVPlayback"]),
+        .library(name: "PlaybackAVFoundation", targets: ["PlaybackAVFoundation"]),
         .library(name: "Metadata", targets: ["Metadata"]),
         .executable(name: "CineMindApp", targets: ["CineMindApp"]),
         .executable(name: "CineMindShell", targets: ["CineMindShell"]),
-        .executable(name: "CineMindPlaybackShell", targets: ["CineMindPlaybackShell"]),
-        .executable(name: "CineMindPlaybackSurfaceSpike", targets: ["CineMindPlaybackSurfaceSpike"]),
+        .executable(name: "CineMindAVFoundationPlaybackSpike", targets: ["CineMindAVFoundationPlaybackSpike"]),
         .executable(name: "CineMindMetadataShell", targets: ["CineMindMetadataShell"])
     ],
     targets: [
@@ -49,6 +48,13 @@ let package = Package(
             dependencies: ["Domain", "Shared"]
         ),
         .target(
+            name: "PlaybackAVFoundation",
+            dependencies: ["Playback"],
+            linkerSettings: [
+                .linkedFramework("AVFoundation")
+            ]
+        ),
+        .target(
             name: "Metadata",
             dependencies: ["Domain", "Shared"]
         ),
@@ -56,32 +62,21 @@ let package = Package(
             name: "Application",
             dependencies: ["Domain", "Persistence", "Playback", "Metadata", "Shared"]
         ),
-        .systemLibrary(
-            name: "CLibMPV",
-            pkgConfig: "mpv",
-            providers: [
-                .brew(["mpv"])
-            ]
-        ),
-        .target(
-            name: "LibMPVPlayback",
-            dependencies: ["Playback", "CLibMPV"]
-        ),
         .executableTarget(
             name: "CineMindApp",
-            dependencies: ["AppUI", "Application", "Playback", "LibMPVPlayback", "Persistence", "Scanner", "Shared"]
+            dependencies: ["AppUI", "Application", "Playback", "PlaybackAVFoundation", "Persistence", "Scanner", "Shared"]
         ),
         .executableTarget(
             name: "CineMindShell",
             dependencies: ["Domain", "Persistence"]
         ),
         .executableTarget(
-            name: "CineMindPlaybackShell",
-            dependencies: ["Application", "Playback", "LibMPVPlayback", "Shared"]
-        ),
-        .executableTarget(
-            name: "CineMindPlaybackSurfaceSpike",
-            dependencies: ["Playback", "LibMPVPlayback"]
+            name: "CineMindAVFoundationPlaybackSpike",
+            dependencies: [],
+            linkerSettings: [
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("AVKit")
+            ]
         ),
         .executableTarget(
             name: "CineMindMetadataShell",
@@ -106,6 +101,10 @@ let package = Package(
         .testTarget(
             name: "PlaybackTests",
             dependencies: ["Playback"]
+        ),
+        .testTarget(
+            name: "PlaybackAVFoundationTests",
+            dependencies: ["PlaybackAVFoundation", "Playback"]
         ),
         .testTarget(
             name: "MetadataTests",

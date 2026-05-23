@@ -23,7 +23,7 @@ struct CineMindApp: App {
         }
 
         return AnyView(
-            PlaybackOpenGLRenderSurfaceView(backend: playbackRuntime.backend)
+            PlaybackAVFoundationSurfaceView(backend: playbackRuntime.backend)
         )
     }
 

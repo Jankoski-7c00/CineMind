@@ -46,6 +46,8 @@ public struct PlaybackApplicationStatus: Sendable, Equatable {
 public protocol PlaybackApplicationControlling: Sendable {
     var statusStream: AsyncStream<PlaybackApplicationStatus> { get }
     func open(mediaFileID: MediaFileID) async
+    func pause() async
+    func resume() async
     func stop() async
 }
 
@@ -133,6 +135,26 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         await closeProgressSessionIfOpen()
         resetActiveSession()
         emitStatus(.idle)
+    }
+
+    public func pause() async {
+        startEventLoopIfNeeded()
+
+        guard currentState == .playing else {
+            return
+        }
+
+        await coordinator.pause()
+    }
+
+    public func resume() async {
+        startEventLoopIfNeeded()
+
+        guard currentState == .paused else {
+            return
+        }
+
+        await coordinator.play()
     }
 
     private func startEventLoopIfNeeded() {

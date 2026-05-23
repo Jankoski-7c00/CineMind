@@ -66,7 +66,7 @@ The architecture must prevent:
           v             v             v          v
 +---------+--+   +------+-----+   +---+----+   +-+----------+
 | Persistence|   |  Playback  |   |Metadata|   | Subtitle   |
-| SQLite     |   | libmpv     |   | TMDB   |   | Local/Online|
+| SQLite     |   | AVFoundation|  | TMDB   |   | Local/Online|
 +------------+   +------------+   +--------+   +------------+
           |
           v
@@ -78,7 +78,8 @@ The architecture must prevent:
 
 ## Core Rule
 
-The UI must not directly access SQLite, libmpv, TMDB, subtitle providers, or AI providers.
+The UI must not directly access SQLite, concrete playback frameworks, TMDB,
+subtitle providers, or AI providers.
 
 All user-facing features must pass through explicit application-level use cases or coordinators.
 
@@ -263,14 +264,22 @@ Persistence is the source of truth for durable app state.
 
 Responsible for:
 
-- libmpv integration
 - playback lifecycle
 - playback state machine
-- audio/subtitle track enumeration
 - seek/play/pause commands
 - playback error mapping
 - progress events
 - resume position updates
+- backend-neutral playback coordination
+
+Production backend:
+
+- `PlaybackAVFoundation` for AVFoundation/AVKit-backed macOS playback.
+
+Experimental/quarantined backend:
+
+- `LibMPVPlayback` remains available only for shell/spike work until a later
+  removal or fallback decision is approved.
 
 Must expose:
 
@@ -280,12 +289,12 @@ Must expose:
 - `PlaybackCommand`
 - `PlaybackEvent`
 
-Must not expose raw mpv handles outside the module.
+Must not expose concrete backend handles outside the owning backend target.
 
 Forbidden:
 
-- direct mpv calls from UI
-- direct mpv calls from Domain
+- direct AVFoundation, AVKit, VLCKit, or mpv calls from UI
+- direct playback framework calls from Domain
 - playback state stored only in UI state
 
 ---
@@ -441,7 +450,11 @@ Domain -> Subtitle
 Domain -> AI
 
 AppUI -> SQLite
-AppUI -> libmpv
+AppUI -> concrete playback frameworks
+AppUI -> AVFoundation
+AppUI -> AVKit
+AppUI -> VLCKit
+AppUI -> LibMPVPlayback
 AppUI -> TMDB SDK
 AppUI -> AI SDK
 
@@ -1139,12 +1152,23 @@ Responsibilities:
 
 - create playback session
 - load selected `MediaFile`
-- configure libmpv
+- coordinate the selected backend
 - expose playback state
-- map mpv events to app events
+- map backend events to app events
 - handle progress persistence
-- handle track selection
+- handle future track selection where the backend supports it
 - report errors
+
+Production backend selection:
+
+- Phase 4.5R uses `PlaybackAVFoundation`.
+- `LibMPVPlayback` is quarantined as experimental/spike code.
+- A future VLCKit fallback may add broader format and subtitle compatibility
+  after packaging, signing, notarization, and capability policy are designed.
+
+CineMindApp is the composition root that wires the concrete backend and the
+concrete playback surface. AppUI remains backend-agnostic and sees only the
+Application playback facade plus an abstract SwiftUI surface slot.
 
 ---
 
@@ -1205,7 +1229,7 @@ Errors must be mapped to user-readable categories:
 file_missing
 permission_denied
 unsupported_format
-mpv_error
+backend_error
 subtitle_error
 unknown
 ```
@@ -1758,7 +1782,7 @@ Strict recommended implementation order:
 5. Scanner MVP
 6. Media list query
 7. SwiftUI shell
-8. libmpv playback MVP
+8. AVFoundation playback MVP
 9. Playback history
 10. TMDB metadata provider
 11. Poster cache
@@ -1781,7 +1805,7 @@ MVP architecture is acceptable only if:
 - the app can import a folder
 - scanned files persist in SQLite
 - media list survives restart
-- playback works through libmpv
+- playback works through AVFoundation-compatible local files
 - playback progress persists
 - metadata can be matched and refreshed
 - keyword search works without AI
@@ -1819,7 +1843,7 @@ Any major architectural change must be recorded as an ADR.
 ADR examples:
 
 ```text
-ADR-001-use-libmpv-as-only-playback-engine.md
+ADR-001-use-avfoundation-first-playback.md
 ADR-002-use-sqlite-as-primary-store.md
 ADR-003-local-first-ai-provider-boundary.md
 ADR-004-single-library-mvp.md
@@ -1850,7 +1874,7 @@ Claude Code must not:
 
 - add server/API behavior
 - add a plugin runtime
-- add a second playback engine
+- add a concrete playback backend outside the approved AVFoundation-first plan
 - introduce cloud-first AI flows
 - bypass privacy filtering
 - make UI access SQLite directly

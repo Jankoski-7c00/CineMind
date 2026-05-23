@@ -95,6 +95,146 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         )
     }
 
+    func testPauseForwardsCommandAndStatusTracksPaused() async throws {
+        let file = try makeApplicationPlayableFile("pause")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.pause()
+        await fixture.backend.waitForCommandCount(3)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .pause],
+            backend: fixture.backend
+        )
+
+        fixture.backend.emit(.stateChanged(.paused))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .paused,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil
+            ),
+            statuses: &statuses
+        )
+    }
+
+    func testResumeForwardsPlayCommandAndStatusTracksPlaying() async throws {
+        let file = try makeApplicationPlayableFile("resume")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        await fixture.controller.pause()
+        fixture.backend.emit(.stateChanged(.paused))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .paused,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil
+            ),
+            statuses: &statuses
+        )
+
+        await fixture.controller.resume()
+        await fixture.backend.waitForCommandCount(4)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .pause, .play],
+            backend: fixture.backend
+        )
+
+        fixture.backend.emit(.stateChanged(.playing))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil
+            ),
+            statuses: &statuses
+        )
+    }
+
+    func testPauseResumeInIdleAreNoOps() async throws {
+        let fixture = makeFixture(files: [:])
+        let statuses = PlaybackStatusReader(fixture.controller.statusStream)
+
+        await fixture.controller.pause()
+        await fixture.controller.resume()
+
+        await assertCommands([], backend: fixture.backend)
+        try await assertNoStatus(statuses)
+    }
+
+    func testPauseResumeWhileLoadingAreNoOps() async throws {
+        let file = try makeApplicationPlayableFile("loading-noop")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses)
+        await fixture.controller.pause()
+        await fixture.controller.resume()
+
+        await assertCommands([.load(playbackPlayableFile(from: file))], backend: fixture.backend)
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+    }
+
+    func testPauseResumeWhileReadyAreNoOps() async throws {
+        let file = try makeApplicationPlayableFile("ready-noop")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses)
+        fixture.backend.emit(.stateChanged(.ready))
+        try await discardNextStatus(statuses: &statuses)
+        await fixture.backend.waitForCommandCount(2)
+
+        await fixture.controller.pause()
+        await fixture.controller.resume()
+
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play],
+            backend: fixture.backend
+        )
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+    }
+
+    func testPauseResumeWhileBufferingAreNoOps() async throws {
+        let file = try makeApplicationPlayableFile("buffering-noop")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        fixture.backend.emit(.stateChanged(.buffering))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .buffering,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil
+            ),
+            statuses: &statuses
+        )
+
+        await fixture.controller.pause()
+        await fixture.controller.resume()
+
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play],
+            backend: fixture.backend
+        )
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+    }
+
     func testOpenFailureProducesUserSafeFailureWithoutLoadingBackend() async throws {
         let error = SecretOpeningError()
         let fixture = makeFixture(files: [:], openingError: error)
@@ -283,6 +423,35 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         )
     }
 
+    private func openAndReachPlaying(
+        file: Application.PlayableFile,
+        fixture: ControllerFixture,
+        statuses: inout AsyncStream<PlaybackApplicationStatus>.Iterator,
+        sourceFile: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses, file: sourceFile, line: line)
+
+        fixture.backend.emit(.stateChanged(.ready))
+        try await discardNextStatus(statuses: &statuses, file: sourceFile, line: line)
+        await fixture.backend.waitForCommandCount(2)
+
+        fixture.backend.emit(.stateChanged(.playing))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil
+            ),
+            statuses: &statuses,
+            file: sourceFile,
+            line: line
+        )
+    }
+
     private func assertNextStatus(
         _ expected: PlaybackApplicationStatus,
         statuses: inout AsyncStream<PlaybackApplicationStatus>.Iterator,
@@ -313,6 +482,38 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         return status
     }
 
+    private func assertNoStatus(
+        _ statuses: PlaybackStatusReader,
+        timeoutNanoseconds: UInt64 = 20_000_000,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let status = try await nextStatus(
+            statuses,
+            timeoutNanoseconds: timeoutNanoseconds
+        )
+        XCTAssertNil(status, file: file, line: line)
+    }
+
+    private func nextStatus(
+        _ statuses: PlaybackStatusReader,
+        timeoutNanoseconds: UInt64
+    ) async throws -> PlaybackApplicationStatus? {
+        try await withThrowingTaskGroup(of: PlaybackApplicationStatus?.self) { group in
+            group.addTask {
+                await statuses.next()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return nil
+            }
+
+            let status = try await group.next() ?? nil
+            group.cancelAll()
+            return status
+        }
+    }
+
     private func assertCommands(
         _ expected: [FakeBackendCommand],
         backend: FakePlaybackBackend,
@@ -333,6 +534,22 @@ private struct ControllerFixture {
 
 private enum PlaybackApplicationControllerTestError: Error {
     case missingStatus
+}
+
+private final class PlaybackStatusReader: @unchecked Sendable {
+    private var iterator: AsyncStream<PlaybackApplicationStatus>.Iterator
+
+    init(_ stream: AsyncStream<PlaybackApplicationStatus>) {
+        self.iterator = stream.makeAsyncIterator()
+    }
+
+    init(existingIterator: AsyncStream<PlaybackApplicationStatus>.Iterator) {
+        self.iterator = existingIterator
+    }
+
+    func next() async -> PlaybackApplicationStatus? {
+        await iterator.next()
+    }
 }
 
 private struct SecretOpeningError: Error {

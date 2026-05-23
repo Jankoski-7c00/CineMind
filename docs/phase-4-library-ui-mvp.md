@@ -53,7 +53,8 @@ Rules:
 - Persistence remains network-free.
 - Metadata remains Persistence-free.
 - Playback core remains UI-free.
-- LibMPVPlayback remains the only raw libmpv integration layer.
+- PlaybackAVFoundation is the production playback backend for Phase 4.5R.
+- LibMPVPlayback remains quarantined for experimental shell/spike work only.
 - CineMindApp is the composition root that wires concrete modules.
 
 Allowed AppUI dependencies:
@@ -72,6 +73,9 @@ AppUI -> Persistence
 AppUI -> Scanner
 AppUI -> Metadata
 AppUI -> Playback
+AppUI -> AVFoundation
+AppUI -> AVKit
+AppUI -> AppKit playback bridge code
 AppUI -> LibMPVPlayback
 ```
 
@@ -91,9 +95,9 @@ CineMindApp
 Approved:
 
 - SwiftUI for the app shell, sidebar, browser, detail screens, toolbar, commands, and presentation state.
-- AppKit `NSOpenGLView` for the playback render surface.
-- `NSViewRepresentable` as the bridge from SwiftUI to the AppKit playback surface.
-- If the bridge imports `LibMPVPlayback`, it belongs in the composition root layer, not in AppUI.
+- AVFoundation/AVKit for the initial embedded playback surface.
+- `AVPlayerView` or `AVPlayerLayer` for display, bridged from SwiftUI at the composition root.
+- If the bridge imports AVFoundation, AVKit, or AppKit, it belongs in CineMindApp, not in AppUI.
 
 Do not rewrite the full app in AppKit.
 
@@ -180,14 +184,17 @@ See: [`docs/phase-4-4-metadata-detail-posters.md`](phase-4-4-metadata-detail-pos
 
 ## 4.5 Embedded Playback Integration
 
-Bring the proven embedded playback surface into the app:
+Bring AVFoundation-first embedded playback into the app:
 
-- Production playback surface API.
-- Composition-root SwiftUI wrapper around the AppKit render view.
+- Production `PlaybackAVFoundation` backend.
+- Composition-root SwiftUI wrapper around `AVPlayerView` or `AVPlayerLayer`.
 - Playback application controller.
 - Open selected media in embedded playback.
+- AVFoundation-compatible local formats first, such as MP4, MOV, M4V, and system-supported codecs.
 
 No full controls yet beyond the minimum needed to start and stop safely.
+Broad MKV/ASS/non-system-codec compatibility is deferred to a future VLCKit
+fallback phase.
 
 See: [`docs/phase-4-5-embedded-playback-integration.md`](phase-4-5-embedded-playback-integration.md)
 

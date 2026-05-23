@@ -92,9 +92,10 @@ Not supported:
 
 ### Playback
 
--   libmpv playback
+-   AVFoundation-compatible local playback
+-   MP4/MOV/M4V and system-supported codecs first
 -   Resume playback
--   Audio/subtitle switching
+-   Audio/subtitle switching where supported by the active backend
 -   Playback history
 
 ------------------------------------------------------------------------
@@ -202,6 +203,7 @@ These are intentionally NOT part of MVP or Beta:
 -   Downloader features
 -   Real-time filesystem monitoring
 -   Complex episode mapping
+-   Broad MKV/ASS/non-system-codec compatibility before a future VLCKit fallback phase
 -   AI-based viewing analytics
 
 ------------------------------------------------------------------------

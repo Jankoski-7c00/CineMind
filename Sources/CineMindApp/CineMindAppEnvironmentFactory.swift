@@ -1,8 +1,8 @@
 import AppUI
 import Application
 import Foundation
-import LibMPVPlayback
 import Playback
+import PlaybackAVFoundation
 import Persistence
 import Scanner
 
@@ -12,13 +12,13 @@ struct CineMindAppStartupEnvironment {
 }
 
 final class CineMindPlaybackRuntime {
-    let backend: LibMPVPlaybackBackend
+    let backend: AVFoundationPlaybackBackend
     let coordinator: PlaybackCoordinator
     let progressCoordinator: PlaybackProgressCoordinator
     let controller: PlaybackApplicationController
 
     init(
-        backend: LibMPVPlaybackBackend,
+        backend: AVFoundationPlaybackBackend,
         coordinator: PlaybackCoordinator,
         progressCoordinator: PlaybackProgressCoordinator,
         controller: PlaybackApplicationController
@@ -67,27 +67,22 @@ enum CineMindAppEnvironmentFactory {
     }
 
     private static func makePlaybackRuntime(store: CineMindStore) -> CineMindPlaybackRuntime? {
-        do {
-            let backend = try LibMPVPlaybackBackend(mode: .embedded)
-            let coordinator = PlaybackCoordinator(backend: backend)
-            let progressCoordinator = PlaybackProgressCoordinator(
-                progressUseCase: PlaybackProgressUseCase(store: store)
-            )
-            let controller = PlaybackApplicationController(
-                coordinator: coordinator,
-                progressCoordinator: progressCoordinator,
-                mediaOpening: OpenMediaUseCase(store: store)
-            )
-            return CineMindPlaybackRuntime(
-                backend: backend,
-                coordinator: coordinator,
-                progressCoordinator: progressCoordinator,
-                controller: controller
-            )
-        } catch {
-            writeWarning("Playback runtime unavailable: \(error)")
-            return nil
-        }
+        let backend = AVFoundationPlaybackBackend()
+        let coordinator = PlaybackCoordinator(backend: backend)
+        let progressCoordinator = PlaybackProgressCoordinator(
+            progressUseCase: PlaybackProgressUseCase(store: store)
+        )
+        let controller = PlaybackApplicationController(
+            coordinator: coordinator,
+            progressCoordinator: progressCoordinator,
+            mediaOpening: OpenMediaUseCase(store: store)
+        )
+        return CineMindPlaybackRuntime(
+            backend: backend,
+            coordinator: coordinator,
+            progressCoordinator: progressCoordinator,
+            controller: controller
+        )
     }
 
     private static func databaseURL() throws -> URL {
