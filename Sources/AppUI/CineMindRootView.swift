@@ -2,9 +2,14 @@ import SwiftUI
 
 public struct CineMindRootView: View {
     @StateObject private var viewModel: AppShellViewModel
+    private let playbackSurface: AnyView?
 
-    public init(viewModel: AppShellViewModel = AppShellViewModel()) {
+    public init(
+        viewModel: AppShellViewModel = AppShellViewModel(),
+        playbackSurface: AnyView? = nil
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel)
+        self.playbackSurface = playbackSurface
     }
 
     public var body: some View {
@@ -25,7 +30,10 @@ public struct CineMindRootView: View {
     @ViewBuilder
     private var shellView: some View {
         if let environment = viewModel.environment {
-            ReadyShellView(environment: environment)
+            ReadyShellView(
+                environment: environment,
+                playbackSurface: playbackSurface
+            )
         } else {
             NavigationSplitView {
                 SidebarView(selectedSection: .constant(.library))
@@ -57,11 +65,16 @@ public struct CineMindRootView: View {
 
 fileprivate struct ReadyShellView: View {
     let environment: AppShellEnvironment
+    let playbackSurface: AnyView?
     @StateObject private var browserViewModel: LibraryBrowserViewModel
     @StateObject private var detailViewModel: LibraryItemDetailViewModel
 
-    init(environment: AppShellEnvironment) {
+    init(
+        environment: AppShellEnvironment,
+        playbackSurface: AnyView?
+    ) {
         self.environment = environment
+        self.playbackSurface = playbackSurface
         let detailViewModel = LibraryItemDetailViewModel(
             detailBrowser: environment.itemDetailBrowser,
             playbackController: environment.playbackController
@@ -91,7 +104,10 @@ fileprivate struct ReadyShellView: View {
         } content: {
             LibraryBrowserView(viewModel: browserViewModel)
         } detail: {
-            LibraryItemDetailView(viewModel: detailViewModel)
+            LibraryItemDetailView(
+                viewModel: detailViewModel,
+                playbackSurface: playbackSurface
+            )
                 .onChange(of: browserViewModel.selectedItemID) { _, newID in
                     Task { await detailViewModel.loadDetail(for: newID) }
                 }

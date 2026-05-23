@@ -45,6 +45,7 @@ final class MPVOpenGLRenderAdapter: @unchecked Sendable {
     private var isPreparing = false
     private var isRenderScheduled = false
     private var isShuttingDown = false
+    private var lifecycleGeneration: UInt64 = 0
     private var hasLoggedRenderError = false
 
     @MainActor
@@ -55,12 +56,12 @@ final class MPVOpenGLRenderAdapter: @unchecked Sendable {
 
     @MainActor
     func prepare() async throws {
-        if renderContext != nil {
-            return
-        }
-
         guard !readShuttingDown() else {
             throw PlaybackError.invalidState("render surface has already shut down")
+        }
+
+        if renderContext != nil {
+            return
         }
 
         guard !isPreparing else {
@@ -76,6 +77,8 @@ final class MPVOpenGLRenderAdapter: @unchecked Sendable {
             isPreparing = false
         }
 
+        let generation = currentLifecycleGeneration()
+
         openGLContext.makeCurrentContext()
         openGLContext.update()
 
@@ -84,17 +87,26 @@ final class MPVOpenGLRenderAdapter: @unchecked Sendable {
         }
 
         do {
-            let createdContext = try await runtime.withRenderCore { core in
-                try self.createRenderContext(core: core)
+            try await runtime.withRenderCore { core in
+                guard self.isActive(generation: generation) else {
+                    throw PlaybackError.invalidState("render surface has already shut down")
+                }
+
+                let createdContext = try self.createRenderContext(core: core)
+                guard self.isActive(generation: generation) else {
+                    createdContext.renderAPI.free(context: createdContext.context)
+                    throw PlaybackError.invalidState("render surface has already shut down")
+                }
+
+                self.renderAPI = createdContext.renderAPI
+                self.renderContext = createdContext.context
+                createdContext.renderAPI.setUpdateCallback(
+                    context: createdContext.context,
+                    callback: mpvRenderUpdateCallback,
+                    callbackContext: self.callbackContext
+                )
+                self.renderNow()
             }
-            renderAPI = createdContext.renderAPI
-            renderContext = createdContext.context
-            createdContext.renderAPI.setUpdateCallback(
-                context: createdContext.context,
-                callback: mpvRenderUpdateCallback,
-                callbackContext: callbackContext
-            )
-            renderNow()
         } catch {
             if renderContext == nil, let openGLLibrary {
                 dlclose(openGLLibrary)
@@ -160,8 +172,20 @@ final class MPVOpenGLRenderAdapter: @unchecked Sendable {
     }
 
     @MainActor
+    func detach() {
+        closeRenderSurface()
+    }
+
+    @MainActor
     func shutdown() {
-        markShuttingDown()
+        closeRenderSurface()
+    }
+
+    @MainActor
+    private func closeRenderSurface() {
+        guard markShuttingDownIfNeeded() else {
+            return
+        }
 
         if let renderContext, let renderAPI {
             renderAPI.setUpdateCallback(context: renderContext, callback: nil, callbackContext: nil)
@@ -171,6 +195,7 @@ final class MPVOpenGLRenderAdapter: @unchecked Sendable {
 
         renderContext = nil
         renderAPI = nil
+        openGLView = nil
 
         if let openGLLibrary {
             dlclose(openGLLibrary)
@@ -287,6 +312,22 @@ final class MPVOpenGLRenderAdapter: @unchecked Sendable {
         UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
     }
 
+    private func currentLifecycleGeneration() -> UInt64 {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return lifecycleGeneration
+    }
+
+    private func isActive(generation: UInt64) -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return !isShuttingDown && lifecycleGeneration == generation
+    }
+
     private func markRenderScheduledIfNeeded() -> Bool {
         lock.lock()
         defer {
@@ -307,11 +348,20 @@ final class MPVOpenGLRenderAdapter: @unchecked Sendable {
         lock.unlock()
     }
 
-    private func markShuttingDown() {
+    private func markShuttingDownIfNeeded() -> Bool {
         lock.lock()
+        defer {
+            lock.unlock()
+        }
+
+        guard !isShuttingDown else {
+            return false
+        }
+
         isShuttingDown = true
         isRenderScheduled = false
-        lock.unlock()
+        lifecycleGeneration &+= 1
+        return true
     }
 
     private func readShuttingDown() -> Bool {

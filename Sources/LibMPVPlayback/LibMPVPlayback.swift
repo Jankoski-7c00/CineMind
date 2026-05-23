@@ -94,6 +94,17 @@ public final class LibMPVPlaybackBackend: PlaybackBackend, @unchecked Sendable {
     }
 
     @MainActor
+    public func detachRenderSurface() {
+        guard !readShuttingDown() else {
+            return
+        }
+
+        let renderAdapter = self.renderAdapter
+        self.renderAdapter = nil
+        renderAdapter?.detach()
+    }
+
+    @MainActor
     public func renderSurfaceNow() {
         guard !readShuttingDown() else {
             return

@@ -111,6 +111,34 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         Task { await loadDetail(for: id) }
     }
 
+    public func playFile(mediaFileID: MediaFileID) {
+        guard let playbackController else {
+            playbackStatus = PlaybackApplicationStatus(
+                state: .failed("Playback is unavailable."),
+                mediaFileID: mediaFileID,
+                displayName: nil,
+                positionMS: 0,
+                durationMS: nil
+            )
+            return
+        }
+
+        Task {
+            await playbackController.open(mediaFileID: mediaFileID)
+        }
+    }
+
+    public func stopPlayback() {
+        guard let playbackController else {
+            playbackStatus = .idle
+            return
+        }
+
+        Task {
+            await playbackController.stop()
+        }
+    }
+
     private func loadPosterImage(localCachePath: String?, generation: Int) async {
         guard generation == loadingGeneration else { return }
         posterImageState = .loading
@@ -128,9 +156,14 @@ public final class LibraryItemDetailViewModel: ObservableObject {
 
 public struct LibraryItemDetailView: View {
     @ObservedObject var viewModel: LibraryItemDetailViewModel
+    private let playbackSurface: AnyView?
 
-    public init(viewModel: LibraryItemDetailViewModel) {
+    public init(
+        viewModel: LibraryItemDetailViewModel,
+        playbackSurface: AnyView? = nil
+    ) {
         self.viewModel = viewModel
+        self.playbackSurface = playbackSurface
     }
 
     public var body: some View {
@@ -196,6 +229,8 @@ public struct LibraryItemDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                playbackBlock
+
                 Divider()
                 metadataBlock(detail.metadataDetail)
 
@@ -212,6 +247,36 @@ public struct LibraryItemDetailView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var playbackBlock: some View {
+        if viewModel.playbackStatus.state != .idle {
+            VStack(alignment: .leading, spacing: 8) {
+                if let playbackSurface {
+                    playbackSurface
+                        .id("playback-surface")
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 320)
+                        .background(Color.black)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Playback")
+                            .font(.headline)
+                        Text(playbackStatusLabel(viewModel.playbackStatus))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button("Stop") {
+                        viewModel.stopPlayback()
+                    }
+                }
+            }
         }
     }
 
@@ -442,9 +507,76 @@ public struct LibraryItemDetailView: View {
                     Text(file.availabilityLabel)
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    if file.isPlayable {
+                        Button("Play") {
+                            viewModel.playFile(mediaFileID: file.mediaFileID)
+                        }
+                        .controlSize(.small)
+                    }
                 }
             }
         }
+    }
+
+    private func playbackStatusLabel(_ status: PlaybackApplicationStatus) -> String {
+        let stateLabel = playbackStateLabel(status.state)
+
+        var parts = [stateLabel]
+        if let displayName = status.displayName, !displayName.isEmpty {
+            parts.append(displayName)
+        }
+        if let timeLabel = playbackTimeLabel(status) {
+            parts.append(timeLabel)
+        }
+        return parts.joined(separator: " - ")
+    }
+
+    private func playbackStateLabel(_ state: PlaybackApplicationState) -> String {
+        switch state {
+        case .idle:
+            "Idle"
+        case .loading:
+            "Loading"
+        case .ready:
+            "Ready"
+        case .playing:
+            "Playing"
+        case .paused:
+            "Paused"
+        case .buffering:
+            "Buffering"
+        case .ended:
+            "Ended"
+        case .failed(let message):
+            "Failed: \(message)"
+        }
+    }
+
+    private func playbackTimeLabel(_ status: PlaybackApplicationStatus) -> String? {
+        if let durationMS = status.durationMS {
+            return "\(timeLabel(milliseconds: status.positionMS)) / \(timeLabel(milliseconds: durationMS))"
+        }
+
+        guard status.positionMS > 0 else {
+            return nil
+        }
+        return timeLabel(milliseconds: status.positionMS)
+    }
+
+    private func timeLabel(milliseconds: Int) -> String {
+        let totalSeconds = max(0, milliseconds) / 1_000
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+
+        if hours > 0 {
+            return "\(hours):\(twoDigit(minutes)):\(twoDigit(seconds))"
+        }
+        return "\(minutes):\(twoDigit(seconds))"
+    }
+
+    private func twoDigit(_ value: Int) -> String {
+        value < 10 ? "0\(value)" : "\(value)"
     }
 
     private func displayValue(_ value: String?) -> String {

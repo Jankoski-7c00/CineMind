@@ -29,7 +29,7 @@ struct PlaybackOpenGLRenderSurfaceView: NSViewRepresentable {
         if let renderView = nsView as? RenderOpenGLView {
             renderView.renderAfterSurfaceChange = nil
         }
-        coordinator.cancelPreparation()
+        coordinator.detachRenderSurface()
     }
 
     private static func makePixelFormat() -> NSOpenGLPixelFormat {
@@ -91,9 +91,11 @@ extension PlaybackOpenGLRenderSurfaceView {
             backend.renderSurfaceNow()
         }
 
-        func cancelPreparation() {
+        @MainActor
+        func detachRenderSurface() {
             prepareTask?.cancel()
             prepareTask = nil
+            backend.detachRenderSurface()
         }
     }
 }

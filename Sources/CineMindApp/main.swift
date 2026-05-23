@@ -7,11 +7,24 @@ struct CineMindApp: App {
 
     var body: some Scene {
         WindowGroup {
-            CineMindRootView(viewModel: viewModel)
+            CineMindRootView(
+                viewModel: viewModel,
+                playbackSurface: playbackSurface
+            )
                 .task {
                     startAppIfNeeded()
                 }
         }
+    }
+
+    private var playbackSurface: AnyView? {
+        guard let playbackRuntime else {
+            return nil
+        }
+
+        return AnyView(
+            PlaybackOpenGLRenderSurfaceView(backend: playbackRuntime.backend)
+        )
     }
 
     @MainActor
