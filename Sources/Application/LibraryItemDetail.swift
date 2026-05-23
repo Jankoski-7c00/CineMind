@@ -11,6 +11,15 @@ public struct LibraryFileSummary: Sendable, Equatable {
     public let availabilityLabel: String
 }
 
+private let avFoundationPlayableExtensions: Set<String> = ["mp4", "mov", "m4v"]
+
+private func isAVFoundationPlayable(fileExtension: String) -> Bool {
+    let normalized = fileExtension
+        .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        .lowercased()
+    return avFoundationPlayableExtensions.contains(normalized)
+}
+
 public struct LibraryMetadataDetail: Sendable, Equatable {
     public let statusLabel: String
     public let localTitle: String
@@ -182,7 +191,7 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
     private func mapFile(_ file: PersistedMediaFileSummary) -> LibraryFileSummary {
         LibraryFileSummary(
             mediaFileID: file.id,
-            isPlayable: file.isAvailable,
+            isPlayable: file.isAvailable && isAVFoundationPlayable(fileExtension: file.fileExtension),
             fileName: file.fileName,
             fileExtension: file.fileExtension,
             fileSizeLabel: fileSizeLabel(file.fileSizeBytes),

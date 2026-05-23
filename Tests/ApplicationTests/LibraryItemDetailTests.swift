@@ -273,17 +273,24 @@ final class LibraryItemDetailTests: XCTestCase {
         let files = [
             persistedMediaFileSummary(
                 id: "file-playable",
-                fileName: "Playable.mkv",
-                fileExtension: "mkv",
+                fileName: "Playable.mp4",
+                fileExtension: "mp4",
                 fileSizeBytes: 1536,
                 isAvailable: true
             ),
             persistedMediaFileSummary(
-                id: "file-unplayable",
-                fileName: "Unplayable.mp4",
+                id: "file-unavailable",
+                fileName: "Unavailable.mp4",
                 fileExtension: "mp4",
                 fileSizeBytes: 1024 * 1024,
                 isAvailable: false
+            ),
+            persistedMediaFileSummary(
+                id: "file-unsupported",
+                fileName: "Unsupported.mkv",
+                fileExtension: "mkv",
+                fileSizeBytes: 2048,
+                isAvailable: true
             )
         ]
         let store = RecordingLibraryItemDetailStore(
@@ -294,16 +301,58 @@ final class LibraryItemDetailTests: XCTestCase {
         let result = try await useCase.fetchDetail(id: itemID)
         let detail = try XCTUnwrap(result)
 
-        XCTAssertEqual(detail.files.map(\.mediaFileID), ["file-playable", "file-unplayable"])
-        XCTAssertEqual(detail.files.map(\.isPlayable), [true, false])
-        XCTAssertEqual(detail.files.map(\.fileName), ["Playable.mkv", "Unplayable.mp4"])
-        XCTAssertEqual(detail.files.map(\.fileExtension), ["mkv", "mp4"])
-        XCTAssertEqual(detail.files.map(\.fileSizeLabel), ["1.5 KB", "1.0 MB"])
-        XCTAssertEqual(detail.files.map(\.availabilityLabel), ["available", "unavailable"])
+        XCTAssertEqual(detail.files.map(\.mediaFileID), ["file-playable", "file-unavailable", "file-unsupported"])
+        XCTAssertEqual(detail.files.map(\.isPlayable), [true, false, false])
+        XCTAssertEqual(detail.files.map(\.fileName), ["Playable.mp4", "Unavailable.mp4", "Unsupported.mkv"])
+        XCTAssertEqual(detail.files.map(\.fileExtension), ["mp4", "mp4", "mkv"])
+        XCTAssertEqual(detail.files.map(\.fileSizeLabel), ["1.5 KB", "1.0 MB", "2.0 KB"])
+        XCTAssertEqual(detail.files.map(\.availabilityLabel), ["available", "unavailable", "available"])
         XCTAssertEqual(
             detail.files.filter(\.isPlayable).map(\.mediaFileID),
             ["file-playable"]
         )
+    }
+
+    func testAVFoundationPlayableExtensions() async throws {
+        let supportedExtensions = ["mp4", "mov", "m4v", "MP4", "MOV", "M4V"]
+        for ext in supportedExtensions {
+            let fileID = "f-\(ext)"
+            let file = persistedMediaFileSummary(
+                id: fileID,
+                fileName: "video.\(ext)",
+                fileExtension: ext,
+                fileSizeBytes: 100,
+                isAvailable: true
+            )
+            let store = RecordingLibraryItemDetailStore(
+                detail: makePersistedDetail(id: "test-\(ext)", files: [file])
+            )
+            let useCase = LibraryItemDetailUseCase(store: store)
+            let result = try await useCase.fetchDetail(id: "test-\(ext)")
+            let detail = try XCTUnwrap(result)
+            XCTAssertEqual(detail.files.count, 1)
+            XCTAssertEqual(detail.files.first?.isPlayable, true, "\(ext) should be playable")
+        }
+
+        let unsupportedExtensions = ["mkv", "avi", "wmv", "flv", "webm"]
+        for ext in unsupportedExtensions {
+            let fileID = "f-\(ext)"
+            let file = persistedMediaFileSummary(
+                id: fileID,
+                fileName: "video.\(ext)",
+                fileExtension: ext,
+                fileSizeBytes: 100,
+                isAvailable: true
+            )
+            let store = RecordingLibraryItemDetailStore(
+                detail: makePersistedDetail(id: "test-\(ext)", files: [file])
+            )
+            let useCase = LibraryItemDetailUseCase(store: store)
+            let result = try await useCase.fetchDetail(id: "test-\(ext)")
+            let detail = try XCTUnwrap(result)
+            XCTAssertEqual(detail.files.count, 1)
+            XCTAssertEqual(detail.files.first?.isPlayable, false, "\(ext) should NOT be playable")
+        }
     }
 
     func testMissingMediaItemReturnsNilWithoutMetadataOrPosterReads() async throws {
