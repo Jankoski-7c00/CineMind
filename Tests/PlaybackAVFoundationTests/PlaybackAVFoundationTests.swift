@@ -22,6 +22,20 @@ final class PlaybackAVFoundationTests: XCTestCase {
         try await events.waitFor(.stateChanged(.ready))
     }
 
+    func testLoadSupportedFixtureEmitsTrackDiscoveryEvent() async throws {
+        let backend = AVFoundationPlaybackBackend()
+        addTeardownBlock {
+            await backend.shutdown()
+        }
+        let events = PlaybackEventReader(backend.events)
+
+        try await backend.load(playableFile: makeFixturePlayableFile())
+
+        let tracks = try await events.waitForTracksDiscovered()
+        XCTAssertEqual(Set(tracks.audioTracks.map(\.id)).count, tracks.audioTracks.count)
+        XCTAssertEqual(Set(tracks.subtitleTracks.map(\.id)).count, tracks.subtitleTracks.count)
+    }
+
     func testPlayEmitsPlaying() async throws {
         let backend = AVFoundationPlaybackBackend()
         addTeardownBlock {
@@ -53,7 +67,7 @@ final class PlaybackAVFoundationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(position, 900)
     }
 
-    func testTrackCommandsAreNoopsAndStopEmitsIdle() async throws {
+    func testUnknownTrackCommandsAreNoopsAndStopEmitsIdle() async throws {
         let backend = AVFoundationPlaybackBackend()
         addTeardownBlock {
             await backend.shutdown()
@@ -141,6 +155,24 @@ private final class PlaybackEventReader: @unchecked Sendable {
             throw PlaybackAVFoundationTestError.unexpectedEvent
         }
         return durationMS
+    }
+
+    func waitForTracksDiscovered(
+        timeoutNanoseconds: UInt64 = 5_000_000_000,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> (audioTracks: [PlaybackTrack], subtitleTracks: [PlaybackTrack]) {
+        let event = try await waitForMatching(timeoutNanoseconds: timeoutNanoseconds, file: file, line: line) { event in
+            if case .tracksDiscovered = event {
+                return true
+            }
+            return false
+        }
+
+        guard case .tracksDiscovered(let audioTracks, let subtitleTracks) = event else {
+            throw PlaybackAVFoundationTestError.unexpectedEvent
+        }
+        return (audioTracks, subtitleTracks)
     }
 
     func waitForPosition(

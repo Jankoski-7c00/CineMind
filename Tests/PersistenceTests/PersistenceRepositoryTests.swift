@@ -42,10 +42,11 @@ final class PersistenceRepositoryTests: XCTestCase {
                 "playback_history",
                 "scan_runs",
                 "scan_issues",
-                "schema_migrations"
+                "schema_migrations",
+                "subtitle_assets"
             ]
         )
-        XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3])
+        XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3, 4])
     }
 
     func testMigrationIsIdempotentAcrossReopen() throws {
@@ -53,12 +54,12 @@ final class PersistenceRepositoryTests: XCTestCase {
         do {
             let store = try makeStore()
             firstTables = try store.schemaTableNames()
-            XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3])
+            XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3, 4])
         }
 
         let reopened = try makeStore()
         XCTAssertEqual(try reopened.schemaTableNames(), firstTables)
-        XCTAssertEqual(try reopened.appliedMigrationVersions(), [1, 2, 3])
+        XCTAssertEqual(try reopened.appliedMigrationVersions(), [1, 2, 3, 4])
     }
 
     func testV1DatabaseUpgradesThroughV2ToV3WithoutDataLoss() throws {
@@ -125,9 +126,10 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("playback_history"))
 
         let upgraded = try makeStore()
-        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3])
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4])
         XCTAssertTrue(try upgraded.schemaTableNames().contains("playback_history"))
         XCTAssertTrue(try upgraded.schemaTableNames().contains("metadata_items"))
+        XCTAssertTrue(try upgraded.schemaTableNames().contains("subtitle_assets"))
         XCTAssertEqual(try upgraded.fetchLibrary(id: libraryID)?.name, "Local")
         XCTAssertEqual(try upgraded.fetchLibraryFolders(libraryID: libraryID).map(\.id), [folderID])
         XCTAssertEqual(try upgraded.fetchMediaItem(id: itemID)?.title, "Arrival")
@@ -209,7 +211,7 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("metadata_items"))
 
         let upgraded = try makeStore()
-        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3])
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4])
         XCTAssertEqual(try upgraded.fetchLibrary(id: libraryID)?.name, "CineMind Library")
         XCTAssertEqual(try upgraded.fetchLibraryFolders(libraryID: libraryID).map(\.id), [folderID])
         XCTAssertEqual(try upgraded.fetchMediaItem(id: itemID)?.title, "Arrival")
@@ -225,6 +227,39 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertEqual(
             try upgraded.fetchPlaybackHistory(mediaItemID: itemID, mediaFileID: fileID)?.id,
             playback.id
+        )
+    }
+
+    func testV3DatabaseUpgradesToV4WithoutDataLoss() throws {
+        let libraryID: LibraryID
+        let folderID: LibraryFolderID
+        let itemID: MediaItemID
+        let fileID: MediaFileID
+
+        do {
+            let context = try makePlaybackContext()
+            libraryID = context.library.id
+            folderID = context.folder.id
+            itemID = context.item.id
+            fileID = context.file.id
+        }
+
+        try removeV4SchemaObjects()
+        XCTAssertEqual(try RawSQLiteFixture.migrationVersions(path: databaseURL.path), [1, 2, 3])
+        XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("subtitle_assets"))
+
+        let upgraded = try makeStore()
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4])
+        XCTAssertTrue(try upgraded.schemaTableNames().contains("subtitle_assets"))
+        XCTAssertEqual(try upgraded.fetchLibrary(id: libraryID)?.name, "CineMind Library")
+        XCTAssertEqual(try upgraded.fetchLibraryFolders(libraryID: libraryID).map(\.id), [folderID])
+        XCTAssertEqual(try upgraded.fetchMediaItem(id: itemID)?.title, "Arrival")
+        XCTAssertEqual(
+            try upgraded.fetchMediaFile(
+                libraryFolderID: folderID,
+                relativePath: "Arrival (2016).mkv"
+            )?.id,
+            fileID
         )
     }
 
@@ -271,6 +306,29 @@ final class PersistenceRepositoryTests: XCTestCase {
         let tableNames = Set(try RawSQLiteFixture.tableNames(path: databaseURL.path))
         XCTAssertEqual(try RawSQLiteFixture.migrationVersions(path: databaseURL.path), [1, 2])
         XCTAssertTrue(tableNames.isDisjoint(with: metadataTableNames))
+    }
+
+    func testMigrationV4RollbackPreventsPartialSubtitleSchema() throws {
+        do {
+            _ = try makeStore()
+        }
+        try removeV4SchemaObjects()
+        try RawSQLiteFixture.execute(
+            path: databaseURL.path,
+            sql: "CREATE TABLE idx_subtitle_assets_media_file_id (id TEXT PRIMARY KEY)"
+        )
+
+        XCTAssertThrowsError(try makeStore()) { error in
+            guard let persistenceError = error as? PersistenceError,
+                  case .migrationFailed = persistenceError else {
+                return XCTFail("Expected migrationFailed, got \(error)")
+            }
+        }
+
+        let tableNames = Set(try RawSQLiteFixture.tableNames(path: databaseURL.path))
+        XCTAssertEqual(try RawSQLiteFixture.migrationVersions(path: databaseURL.path), [1, 2, 3])
+        XCTAssertFalse(tableNames.contains("subtitle_assets"))
+        XCTAssertTrue(tableNames.contains("idx_subtitle_assets_media_file_id"))
     }
 
     func testLibraryCoreRecordsPersistAcrossStoreReopen() throws {
@@ -2003,6 +2061,95 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertTrue(result.isAvailable)
     }
 
+    func testSubtitleAssetCRUDAndUnavailableHandling() throws {
+        let context = try makePlaybackContext()
+        let asset = subtitleAsset(context: context)
+
+        try context.store.saveSubtitleAsset(asset)
+        var fetched = try XCTUnwrap(
+            context.store.fetchSubtitleAsset(
+                libraryFolderID: context.folder.id,
+                relativePath: "Arrival (2016).en.srt"
+            )
+        )
+
+        XCTAssertEqual(fetched.id, asset.id)
+        XCTAssertEqual(fetched.mediaItemID, context.item.id)
+        XCTAssertEqual(fetched.mediaFileID, context.file.id)
+        XCTAssertEqual(fetched.libraryFolderID, context.folder.id)
+        XCTAssertEqual(fetched.fileExtension, "srt")
+        XCTAssertEqual(fetched.format, .srt)
+        XCTAssertEqual(fetched.languageCode, "en")
+        XCTAssertEqual(fetched.displayName, "English")
+        XCTAssertTrue(fetched.isAvailable)
+        XCTAssertEqual(try context.store.fetchSubtitleAssets(mediaItemID: context.item.id).map(\.id), [asset.id])
+        XCTAssertEqual(try context.store.fetchSubtitleAssets(mediaFileID: context.file.id).map(\.id), [asset.id])
+
+        fetched.displayName = "English SDH"
+        fetched.updatedAt = Date(timeIntervalSince1970: 300)
+        try context.store.saveSubtitleAsset(fetched)
+        XCTAssertEqual(
+            try context.store.fetchSubtitleAsset(
+                libraryFolderID: context.folder.id,
+                relativePath: "Arrival (2016).en.srt"
+            )?.displayName,
+            "English SDH"
+        )
+
+        try context.store.markSubtitleAssetUnavailable(
+            id: asset.id,
+            updatedAt: Date(timeIntervalSince1970: 400)
+        )
+        let unavailable = try XCTUnwrap(context.store.fetchSubtitleAssets(mediaFileID: context.file.id).first)
+        XCTAssertFalse(unavailable.isAvailable)
+        XCTAssertEqual(unavailable.updatedAt, Date(timeIntervalSince1970: 400))
+    }
+
+    func testFetchPersistedSubtitleAssetsIncludesFolderAvailabilityAndReadOnlyStore() throws {
+        let context = try makePlaybackContext()
+        try context.store.saveSubtitleAsset(subtitleAsset(context: context))
+
+        let persisted = try XCTUnwrap(context.store.fetchPersistedSubtitleAssets(mediaFileID: context.file.id).first)
+        XCTAssertEqual(persisted.folderRootPath, context.folder.rootPath)
+        XCTAssertTrue(persisted.folderIsAvailable)
+        XCTAssertTrue(persisted.isUsable)
+
+        try context.store.updateLibraryFolderAvailability(
+            id: context.folder.id,
+            isAvailable: false,
+            lastSeenAt: nil,
+            lastScanAt: nil
+        )
+        let unavailableFolderAsset = try XCTUnwrap(
+            context.store.fetchPersistedSubtitleAssets(mediaFileID: context.file.id).first
+        )
+        XCTAssertFalse(unavailableFolderAsset.folderIsAvailable)
+        XCTAssertFalse(unavailableFolderAsset.isUsable)
+
+        let readOnly = try CineMindStore(readOnlyPath: databaseURL.path)
+        let readOnlyAsset = try XCTUnwrap(readOnly.fetchPersistedSubtitleAssets(mediaFileID: context.file.id).first)
+        XCTAssertEqual(readOnlyAsset.asset.id, persisted.asset.id)
+        XCTAssertFalse(readOnlyAsset.isUsable)
+    }
+
+    func testSubtitleAssetRejectsMediaFileFromDifferentMediaItem() throws {
+        let context = try makePlaybackContext()
+        let otherItem = MediaItem(mediaType: .movie, title: "Moon", year: 2009)
+        try context.store.saveMediaItem(otherItem)
+        let asset = subtitleAsset(context: context, mediaItemID: otherItem.id)
+
+        XCTAssertThrowsError(try context.store.saveSubtitleAsset(asset)) { error in
+            XCTAssertEqual(
+                error as? PersistenceError,
+                .mediaFileMediaItemMismatch(
+                    mediaItemID: otherItem.id,
+                    mediaFileID: context.file.id,
+                    actualMediaItemID: context.item.id
+                )
+            )
+        }
+    }
+
     private func makeStore() throws -> CineMindStore {
         try CineMindStore(path: databaseURL.path)
     }
@@ -2063,6 +2210,7 @@ final class PersistenceRepositoryTests: XCTestCase {
     }
 
     private func removeV3SchemaObjects() throws {
+        try removeV4SchemaObjects()
         try RawSQLiteFixture.execute(
             path: databaseURL.path,
             sql: """
@@ -2080,6 +2228,19 @@ final class PersistenceRepositoryTests: XCTestCase {
                 DROP TABLE IF EXISTS metadata_external_ids;
                 DROP TABLE IF EXISTS metadata_items;
                 DELETE FROM schema_migrations WHERE version = 3;
+                """
+        )
+    }
+
+    private func removeV4SchemaObjects() throws {
+        try RawSQLiteFixture.execute(
+            path: databaseURL.path,
+            sql: """
+                DROP INDEX IF EXISTS idx_subtitle_assets_library_path;
+                DROP INDEX IF EXISTS idx_subtitle_assets_media_file_id;
+                DROP INDEX IF EXISTS idx_subtitle_assets_media_item_id;
+                DROP TABLE IF EXISTS subtitle_assets;
+                DELETE FROM schema_migrations WHERE version = 4;
                 """
         )
     }
@@ -2106,6 +2267,33 @@ final class PersistenceRepositoryTests: XCTestCase {
             lastSeenAt: Date(timeIntervalSince1970: 100),
             createdAt: Date(timeIntervalSince1970: 100),
             updatedAt: Date(timeIntervalSince1970: 100)
+        )
+    }
+
+    private func subtitleAsset(
+        context: PlaybackContext,
+        id: SubtitleAssetID = "subtitle-arrival-en",
+        mediaItemID: MediaItemID? = nil,
+        relativePath: String = "Arrival (2016).en.srt",
+        format: SubtitleFormat = .srt,
+        isAvailable: Bool = true
+    ) -> SubtitleAsset {
+        SubtitleAsset(
+            id: id,
+            mediaItemID: mediaItemID ?? context.item.id,
+            mediaFileID: context.file.id,
+            libraryFolderID: context.folder.id,
+            relativePath: relativePath,
+            fileName: URL(fileURLWithPath: relativePath).lastPathComponent,
+            fileExtension: URL(fileURLWithPath: relativePath).pathExtension,
+            format: format,
+            languageCode: "en",
+            displayName: "English",
+            source: .external,
+            isAvailable: isAvailable,
+            lastSeenAt: Date(timeIntervalSince1970: 200),
+            createdAt: Date(timeIntervalSince1970: 200),
+            updatedAt: Date(timeIntervalSince1970: 200)
         )
     }
 }

@@ -23,6 +23,10 @@ internal enum SQLiteMigrator {
                 try apply(version: 3, statements: version3Statements, connection: connection)
                 applied.insert(3)
             }
+            if !applied.contains(4) {
+                try apply(version: 4, statements: version4Statements, connection: connection)
+                applied.insert(4)
+            }
         } catch {
             throw PersistenceError.migrationFailed(error.localizedDescription)
         }
@@ -291,6 +295,41 @@ internal enum SQLiteMigrator {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_poster_assets_selected_unique
         ON poster_assets(media_item_id, asset_type)
         WHERE is_selected = 1
+        """
+    ]
+
+    private static let version4Statements = [
+        """
+        CREATE TABLE IF NOT EXISTS subtitle_assets (
+            id TEXT PRIMARY KEY,
+            media_item_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE RESTRICT,
+            media_file_id TEXT REFERENCES media_files(id) ON DELETE SET NULL,
+            library_folder_id TEXT REFERENCES library_folders(id) ON DELETE SET NULL,
+            relative_path TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_extension TEXT NOT NULL,
+            format TEXT NOT NULL CHECK(format IN ('srt', 'vtt', 'ass', 'ssa')),
+            language_code TEXT,
+            display_name TEXT,
+            source TEXT NOT NULL CHECK(source IN ('external', 'downloaded')),
+            is_available INTEGER NOT NULL DEFAULT 1 CHECK(is_available IN (0, 1)),
+            last_seen_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            UNIQUE(library_folder_id, relative_path, source)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_subtitle_assets_media_item_id
+        ON subtitle_assets(media_item_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_subtitle_assets_media_file_id
+        ON subtitle_assets(media_file_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_subtitle_assets_library_path
+        ON subtitle_assets(library_folder_id, relative_path)
         """
     ]
 }

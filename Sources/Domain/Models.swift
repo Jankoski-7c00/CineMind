@@ -13,6 +13,7 @@ public typealias MetadataItemID = String
 public typealias MetadataExternalIDID = String
 public typealias MetadataSourceRecordID = String
 public typealias PosterAssetID = String
+public typealias SubtitleAssetID = String
 
 public enum DomainID {
     public static func new() -> String {
@@ -113,6 +114,45 @@ public enum PosterAssetSource: String, Codable, Sendable, Equatable, CaseIterabl
 public enum PosterSelectionSource: String, Codable, Sendable, Equatable, CaseIterable {
     case automatic
     case manual
+}
+
+public enum SubtitleAssetSource: String, Codable, Sendable, Equatable, CaseIterable {
+    case external
+    case downloaded
+}
+
+public enum SubtitleFormat: String, Codable, Sendable, Equatable, CaseIterable {
+    case srt
+    case webVTT = "vtt"
+    case ass
+    case ssa
+
+    public init?(fileExtension: String) {
+        let normalized = fileExtension
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            .lowercased()
+        switch normalized {
+        case "srt":
+            self = .srt
+        case "vtt", "webvtt":
+            self = .webVTT
+        case "ass":
+            self = .ass
+        case "ssa":
+            self = .ssa
+        default:
+            return nil
+        }
+    }
+
+    public var supportsExternalCueParsing: Bool {
+        switch self {
+        case .srt, .webVTT:
+            true
+        case .ass, .ssa:
+            false
+        }
+    }
 }
 
 public enum DomainValidationError: Error, Sendable, Equatable {
@@ -808,5 +848,62 @@ public struct PosterAsset: Codable, Sendable, Equatable {
         if let height, height <= 0 {
             throw DomainValidationError.invalidPosterHeight(height)
         }
+    }
+}
+
+public struct SubtitleAsset: Codable, Sendable, Equatable {
+    public var id: SubtitleAssetID
+    public var mediaItemID: MediaItemID
+    public var mediaFileID: MediaFileID?
+    public var libraryFolderID: LibraryFolderID?
+    public var relativePath: String
+    public var fileName: String
+    public var fileExtension: String
+    public var format: SubtitleFormat
+    public var languageCode: String?
+    public var displayName: String?
+    public var source: SubtitleAssetSource
+    public var isAvailable: Bool
+    public var lastSeenAt: Date?
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: SubtitleAssetID = DomainID.new(),
+        mediaItemID: MediaItemID,
+        mediaFileID: MediaFileID? = nil,
+        libraryFolderID: LibraryFolderID? = nil,
+        relativePath: String,
+        fileName: String,
+        fileExtension: String,
+        format: SubtitleFormat,
+        languageCode: String? = nil,
+        displayName: String? = nil,
+        source: SubtitleAssetSource,
+        isAvailable: Bool = true,
+        lastSeenAt: Date? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        precondition(!mediaItemID.isEmpty, "mediaItemID must not be empty")
+        precondition(!relativePath.isEmpty, "relativePath must not be empty")
+        precondition(!fileName.isEmpty, "fileName must not be empty")
+        precondition(!fileExtension.isEmpty, "fileExtension must not be empty")
+
+        self.id = id
+        self.mediaItemID = mediaItemID
+        self.mediaFileID = mediaFileID
+        self.libraryFolderID = libraryFolderID
+        self.relativePath = relativePath
+        self.fileName = fileName
+        self.fileExtension = fileExtension.lowercased()
+        self.format = format
+        self.languageCode = languageCode
+        self.displayName = displayName
+        self.source = source
+        self.isAvailable = isAvailable
+        self.lastSeenAt = lastSeenAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }

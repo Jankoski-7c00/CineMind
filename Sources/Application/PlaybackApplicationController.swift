@@ -1,6 +1,7 @@
 import Domain
 import Foundation
 import Playback
+import Subtitle
 
 public enum PlaybackApplicationState: Sendable, Equatable {
     case idle
@@ -18,17 +19,23 @@ public struct PlaybackApplicationTrack: Sendable, Equatable, Identifiable {
     public let displayLabel: String
     public let isDefault: Bool
     public let isSelected: Bool
+    public let source: PlaybackApplicationTrackSource
+    public let isSelectable: Bool
 
     public init(
         id: String,
         displayLabel: String,
         isDefault: Bool,
-        isSelected: Bool
+        isSelected: Bool,
+        source: PlaybackApplicationTrackSource = .embedded,
+        isSelectable: Bool = true
     ) {
         self.id = id
         self.displayLabel = displayLabel
         self.isDefault = isDefault
         self.isSelected = isSelected
+        self.source = source
+        self.isSelectable = isSelectable
     }
 }
 
@@ -40,6 +47,7 @@ public struct PlaybackApplicationStatus: Sendable, Equatable {
     public let durationMS: Int?
     public let audioTracks: [PlaybackApplicationTrack]
     public let subtitleTracks: [PlaybackApplicationTrack]
+    public let activeSubtitleText: String?
 
     public init(
         state: PlaybackApplicationState,
@@ -48,7 +56,8 @@ public struct PlaybackApplicationStatus: Sendable, Equatable {
         positionMS: Int,
         durationMS: Int?,
         audioTracks: [PlaybackApplicationTrack] = [],
-        subtitleTracks: [PlaybackApplicationTrack] = []
+        subtitleTracks: [PlaybackApplicationTrack] = [],
+        activeSubtitleText: String? = nil
     ) {
         self.state = state
         self.mediaFileID = mediaFileID
@@ -57,6 +66,7 @@ public struct PlaybackApplicationStatus: Sendable, Equatable {
         self.durationMS = durationMS
         self.audioTracks = audioTracks
         self.subtitleTracks = subtitleTracks
+        self.activeSubtitleText = activeSubtitleText
     }
 
     public static let idle = PlaybackApplicationStatus(
@@ -89,6 +99,8 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
     private let coordinator: PlaybackCoordinator
     private let progressCoordinator: PlaybackProgressCoordinator
     private let mediaOpening: any MediaOpening
+    private let subtitleAssetReader: (any PlaybackSubtitleAssetReading)?
+    private let subtitleFileLoader: any PlaybackSubtitleFileLoading
     private let statusContinuation: AsyncStream<PlaybackApplicationStatus>.Continuation
 
     private var eventTask: Task<Void, Never>?
@@ -99,6 +111,10 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
     private var currentDurationMS: Int?
     private var currentAudioTracks: [PlaybackApplicationTrack] = []
     private var currentSubtitleTracks: [PlaybackApplicationTrack] = []
+    private var currentExternalSubtitleTracks: [PlaybackApplicationTrack] = []
+    private var externalSubtitleAssetsByTrackID: [String: PlaybackSubtitleAsset] = [:]
+    private var activeExternalSubtitleTimeline: SubtitleCueTimeline?
+    private var activeSubtitleText: String?
     private var progressSessionOpen = false
     private var didAutoPlayActiveSession = false
     private var lastEmittedStatus: PlaybackApplicationStatus?
@@ -107,11 +123,15 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
     public init(
         coordinator: PlaybackCoordinator,
         progressCoordinator: PlaybackProgressCoordinator,
-        mediaOpening: any MediaOpening
+        mediaOpening: any MediaOpening,
+        subtitleAssetReader: (any PlaybackSubtitleAssetReading)? = nil,
+        subtitleFileLoader: any PlaybackSubtitleFileLoading = FileSystemPlaybackSubtitleFileLoader()
     ) {
         self.coordinator = coordinator
         self.progressCoordinator = progressCoordinator
         self.mediaOpening = mediaOpening
+        self.subtitleAssetReader = subtitleAssetReader
+        self.subtitleFileLoader = subtitleFileLoader
 
         var continuation: AsyncStream<PlaybackApplicationStatus>.Continuation?
         self.statusStream = AsyncStream(bufferingPolicy: .unbounded) { streamContinuation in
@@ -160,6 +180,9 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         currentDurationMS = nil
         currentAudioTracks = []
         currentSubtitleTracks = []
+        loadExternalSubtitleOptions(mediaFileID: playableFile.mediaFileID)
+        activeExternalSubtitleTimeline = nil
+        activeSubtitleText = nil
         didAutoPlayActiveSession = false
         progressSessionOpen = true
 
@@ -249,13 +272,24 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
     public func selectSubtitleTrack(trackID: String) async {
         startEventLoopIfNeeded()
 
-        guard validTrackSelectionState,
-              currentSubtitleTracks.contains(where: { $0.id == trackID }) else {
+        guard validTrackSelectionState else {
+            return
+        }
+
+        if let asset = externalSubtitleAssetsByTrackID[trackID] {
+            await selectExternalSubtitle(trackID: trackID, asset: asset)
+            return
+        }
+
+        guard currentSubtitleTracks.contains(where: { $0.id == trackID && $0.isSelectable }) else {
             return
         }
 
         await coordinator.selectSubtitleTrack(trackID: trackID)
         currentSubtitleTracks = tracksBySelecting(trackID, in: currentSubtitleTracks)
+        currentExternalSubtitleTracks = tracksByDeselecting(currentExternalSubtitleTracks)
+        activeExternalSubtitleTimeline = nil
+        activeSubtitleText = nil
         emitCurrentStatus()
     }
 
@@ -263,19 +297,18 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         startEventLoopIfNeeded()
 
         guard validTrackSelectionState,
-              currentSubtitleTracks.contains(where: \.isSelected) else {
+              currentSubtitleTracks.contains(where: \.isSelected)
+                || currentExternalSubtitleTracks.contains(where: \.isSelected) else {
             return
         }
 
-        await coordinator.disableSubtitle()
-        currentSubtitleTracks = currentSubtitleTracks.map { track in
-            PlaybackApplicationTrack(
-                id: track.id,
-                displayLabel: track.displayLabel,
-                isDefault: track.isDefault,
-                isSelected: false
-            )
+        if currentSubtitleTracks.contains(where: \.isSelected) {
+            await coordinator.disableSubtitle()
         }
+        currentSubtitleTracks = tracksByDeselecting(currentSubtitleTracks)
+        currentExternalSubtitleTracks = tracksByDeselecting(currentExternalSubtitleTracks)
+        activeExternalSubtitleTimeline = nil
+        activeSubtitleText = nil
         emitCurrentStatus()
     }
 
@@ -350,6 +383,7 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
             await handlePlaybackState(playbackState)
         case .positionUpdated(let positionMS):
             currentPositionMS = max(0, positionMS)
+            updateActiveSubtitleText()
             emitCurrentStatus()
         case .durationUpdated(let durationMS):
             currentDurationMS = max(0, durationMS)
@@ -449,6 +483,10 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         currentDurationMS = nil
         currentAudioTracks = []
         currentSubtitleTracks = []
+        currentExternalSubtitleTracks = []
+        externalSubtitleAssetsByTrackID = [:]
+        activeExternalSubtitleTimeline = nil
+        activeSubtitleText = nil
         progressSessionOpen = false
         didAutoPlayActiveSession = false
     }
@@ -462,7 +500,8 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
                 positionMS: currentPositionMS,
                 durationMS: currentDurationMS,
                 audioTracks: currentAudioTracks,
-                subtitleTracks: currentSubtitleTracks
+                subtitleTracks: currentSubtitleTracks + currentExternalSubtitleTracks,
+                activeSubtitleText: activeSubtitleText
             )
         )
     }
@@ -486,6 +525,98 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         )
     }
 
+    private func loadExternalSubtitleOptions(mediaFileID: MediaFileID) {
+        guard let subtitleAssetReader else {
+            currentExternalSubtitleTracks = []
+            externalSubtitleAssetsByTrackID = [:]
+            return
+        }
+
+        do {
+            let assets = try subtitleAssetReader.fetchPlaybackSubtitleAssets(mediaFileID: mediaFileID)
+            externalSubtitleAssetsByTrackID = Dictionary(
+                uniqueKeysWithValues: assets.map { ($0.trackID, $0) }
+            )
+            currentExternalSubtitleTracks = assets.map(mapExternalSubtitleAsset)
+        } catch {
+            currentExternalSubtitleTracks = []
+            externalSubtitleAssetsByTrackID = [:]
+        }
+    }
+
+    private func mapExternalSubtitleAsset(_ asset: PlaybackSubtitleAsset) -> PlaybackApplicationTrack {
+        PlaybackApplicationTrack(
+            id: asset.trackID,
+            displayLabel: externalSubtitleDisplayLabel(for: asset),
+            isDefault: false,
+            isSelected: false,
+            source: asset.format.supportsExternalCueParsing ? .external : .unsupportedExternal,
+            isSelectable: asset.isSelectable
+        )
+    }
+
+    private func externalSubtitleDisplayLabel(for asset: PlaybackSubtitleAsset) -> String {
+        var label = asset.displayName
+        if !asset.format.supportsExternalCueParsing {
+            label += " (Unsupported)"
+        }
+        return label
+    }
+
+    private func selectExternalSubtitle(trackID: String, asset: PlaybackSubtitleAsset) async {
+        guard validTrackSelectionState, asset.isSelectable,
+              let timeline = externalSubtitleTimeline(for: asset) else {
+            return
+        }
+
+        if currentSubtitleTracks.contains(where: \.isSelected) {
+            await coordinator.disableSubtitle()
+        }
+        currentSubtitleTracks = tracksByDeselecting(currentSubtitleTracks)
+        currentExternalSubtitleTracks = tracksBySelecting(trackID, in: currentExternalSubtitleTracks)
+        activeExternalSubtitleTimeline = timeline
+        updateActiveSubtitleText()
+        emitCurrentStatus()
+    }
+
+    private func externalSubtitleTimeline(for asset: PlaybackSubtitleAsset) -> SubtitleCueTimeline? {
+        guard let subtitleURL = resolvedSubtitleURL(for: asset) else {
+            return nil
+        }
+
+        do {
+            let text = try subtitleFileLoader.loadSubtitleText(from: subtitleURL)
+            return try SubtitleParser.parse(text, format: asset.format)
+        } catch {
+            return nil
+        }
+    }
+
+    private func resolvedSubtitleURL(for asset: PlaybackSubtitleAsset) -> URL? {
+        guard !asset.folderRootPath.isEmpty,
+              (asset.folderRootPath as NSString).isAbsolutePath,
+              !(asset.relativePath as NSString).isAbsolutePath else {
+            return nil
+        }
+
+        let rootURL = URL(fileURLWithPath: asset.folderRootPath, isDirectory: true).standardizedFileURL
+        let resolvedURL = rootURL
+            .appendingPathComponent(asset.relativePath, isDirectory: false)
+            .standardizedFileURL
+
+        let rootPath = rootURL.path
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        let resolvedPath = resolvedURL.path
+        guard resolvedPath == rootPath || resolvedPath.hasPrefix(rootPrefix) else {
+            return nil
+        }
+        return resolvedURL
+    }
+
+    private func updateActiveSubtitleText() {
+        activeSubtitleText = activeExternalSubtitleTimeline?.activeText(atMS: currentPositionMS)
+    }
+
     private func tracksBySelecting(
         _ selectedTrackID: String,
         in tracks: [PlaybackApplicationTrack]
@@ -495,7 +626,22 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
                 id: track.id,
                 displayLabel: track.displayLabel,
                 isDefault: track.isDefault,
-                isSelected: track.id == selectedTrackID
+                isSelected: track.id == selectedTrackID,
+                source: track.source,
+                isSelectable: track.isSelectable
+            )
+        }
+    }
+
+    private func tracksByDeselecting(_ tracks: [PlaybackApplicationTrack]) -> [PlaybackApplicationTrack] {
+        tracks.map { track in
+            PlaybackApplicationTrack(
+                id: track.id,
+                displayLabel: track.displayLabel,
+                isDefault: track.isDefault,
+                isSelected: false,
+                source: track.source,
+                isSelectable: track.isSelectable
             )
         }
     }

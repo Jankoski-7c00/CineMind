@@ -769,6 +769,247 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         )
     }
 
+    func testExternalSubtitleOptionsAreMergedIntoStatus() async throws {
+        let file = try makeApplicationPlayableFile("external-subtitle-options")
+        let supported = playbackSubtitleAsset(
+            id: "external-en",
+            format: .srt,
+            displayName: "English",
+            relativePath: "external-subtitle-options.en.srt"
+        )
+        let unsupported = playbackSubtitleAsset(
+            id: "external-styled",
+            format: .ass,
+            displayName: "Styled",
+            relativePath: "external-subtitle-options.ass"
+        )
+        let fixture = makeFixture(
+            files: [file],
+            subtitleAssets: [file.mediaFileID: [supported, unsupported]]
+        )
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .loading,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: supported.trackID,
+                        displayLabel: "English",
+                        isDefault: false,
+                        isSelected: false,
+                        source: .external,
+                        isSelectable: true
+                    ),
+                    PlaybackApplicationTrack(
+                        id: unsupported.trackID,
+                        displayLabel: "Styled (Unsupported)",
+                        isDefault: false,
+                        isSelected: false,
+                        source: .unsupportedExternal,
+                        isSelectable: false
+                    )
+                ]
+            ),
+            statuses: &statuses
+        )
+
+        fixture.backend.emit(
+            .tracksDiscovered(
+                audioTracks: [],
+                subtitleTracks: [
+                    PlaybackTrack(
+                        id: "embedded-subtitle-1",
+                        type: .subtitle,
+                        language: "es",
+                        title: nil,
+                        isDefault: false,
+                        isSelected: false
+                    )
+                ]
+            )
+        )
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .loading,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: "embedded-subtitle-1",
+                        displayLabel: "ES",
+                        isDefault: false,
+                        isSelected: false
+                    ),
+                    PlaybackApplicationTrack(
+                        id: supported.trackID,
+                        displayLabel: "English",
+                        isDefault: false,
+                        isSelected: false,
+                        source: .external,
+                        isSelectable: true
+                    ),
+                    PlaybackApplicationTrack(
+                        id: unsupported.trackID,
+                        displayLabel: "Styled (Unsupported)",
+                        isDefault: false,
+                        isSelected: false,
+                        source: .unsupportedExternal,
+                        isSelectable: false
+                    )
+                ]
+            ),
+            statuses: &statuses
+        )
+    }
+
+    func testExternalSubtitleSelectionParsesCuesAndDoesNotForwardTrackCommand() async throws {
+        let file = try makeApplicationPlayableFile("external-subtitle-selection")
+        let asset = playbackSubtitleAsset(
+            id: "external-en",
+            format: .srt,
+            displayName: "English",
+            relativePath: "external-subtitle-selection.en.srt"
+        )
+        let fixture = makeFixture(
+            files: [file],
+            subtitleAssets: [file.mediaFileID: [asset]],
+            subtitleTexts: [
+                "/tmp/external-subtitle-selection.en.srt": """
+                1
+                00:00:00,000 --> 00:00:05,000
+                Hello
+
+                2
+                00:00:05,000 --> 00:00:09,000
+                World
+                """
+            ]
+        )
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses)
+        fixture.backend.emit(.stateChanged(.ready))
+        try await discardNextStatus(statuses: &statuses)
+        await fixture.backend.waitForCommandCount(2)
+        fixture.backend.emit(.stateChanged(.playing))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.selectSubtitleTrack(trackID: asset.trackID)
+
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: asset.trackID,
+                        displayLabel: "English",
+                        isDefault: false,
+                        isSelected: true,
+                        source: .external,
+                        isSelectable: true
+                    )
+                ],
+                activeSubtitleText: "Hello"
+            ),
+            statuses: &statuses
+        )
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play],
+            backend: fixture.backend
+        )
+
+        fixture.backend.emit(.positionUpdated(positionMS: 6_000))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 6_000,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: asset.trackID,
+                        displayLabel: "English",
+                        isDefault: false,
+                        isSelected: true,
+                        source: .external,
+                        isSelectable: true
+                    )
+                ],
+                activeSubtitleText: "World"
+            ),
+            statuses: &statuses
+        )
+
+        await fixture.controller.disableSubtitles()
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 6_000,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: asset.trackID,
+                        displayLabel: "English",
+                        isDefault: false,
+                        isSelected: false,
+                        source: .external,
+                        isSelectable: true
+                    )
+                ]
+            ),
+            statuses: &statuses
+        )
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play],
+            backend: fixture.backend
+        )
+    }
+
+    func testUnsupportedExternalSubtitleSelectionIsNoOp() async throws {
+        let file = try makeApplicationPlayableFile("unsupported-external-subtitle")
+        let asset = playbackSubtitleAsset(
+            id: "external-ass",
+            format: .ass,
+            displayName: "Styled",
+            relativePath: "unsupported-external-subtitle.ass"
+        )
+        let fixture = makeFixture(files: [file], subtitleAssets: [file.mediaFileID: [asset]])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses)
+        fixture.backend.emit(.stateChanged(.ready))
+        try await discardNextStatus(statuses: &statuses)
+        await fixture.backend.waitForCommandCount(2)
+        fixture.backend.emit(.stateChanged(.playing))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.selectSubtitleTrack(trackID: asset.trackID)
+
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play],
+            backend: fixture.backend
+        )
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+    }
+
     func testTrackSelectionForMissingTrackIsNoOp() async throws {
         let file = try makeApplicationPlayableFile("missing-track")
         let fixture = makeFixture(files: [file])
@@ -1050,17 +1291,23 @@ final class PlaybackApplicationControllerTests: XCTestCase {
 
     private func makeFixture(
         files: [Application.PlayableFile],
-        openingError: (any Error)? = nil
+        openingError: (any Error)? = nil,
+        subtitleAssets: [MediaFileID: [PlaybackSubtitleAsset]] = [:],
+        subtitleTexts: [String: String] = [:]
     ) -> ControllerFixture {
         makeFixture(
             files: Dictionary(uniqueKeysWithValues: files.map { ($0.mediaFileID, $0) }),
-            openingError: openingError
+            openingError: openingError,
+            subtitleAssets: subtitleAssets,
+            subtitleTexts: subtitleTexts
         )
     }
 
     private func makeFixture(
         files: [MediaFileID: Application.PlayableFile],
-        openingError: (any Error)? = nil
+        openingError: (any Error)? = nil,
+        subtitleAssets: [MediaFileID: [PlaybackSubtitleAsset]] = [:],
+        subtitleTexts: [String: String] = [:]
     ) -> ControllerFixture {
         let backend = FakePlaybackBackend()
         let coordinator = PlaybackCoordinator(backend: backend)
@@ -1070,10 +1317,14 @@ final class PlaybackApplicationControllerTests: XCTestCase {
             now: { Date(timeIntervalSince1970: 1_000) }
         )
         let mediaOpening = FakeMediaOpening(files: files, error: openingError)
+        let subtitleAssetReader = subtitleAssets.isEmpty ? nil : FakeSubtitleAssetReader(assets: subtitleAssets)
+        let subtitleFileLoader = FakeSubtitleFileLoader(textsByPath: subtitleTexts)
         let controller = PlaybackApplicationController(
             coordinator: coordinator,
             progressCoordinator: progressCoordinator,
-            mediaOpening: mediaOpening
+            mediaOpening: mediaOpening,
+            subtitleAssetReader: subtitleAssetReader,
+            subtitleFileLoader: subtitleFileLoader
         )
         return ControllerFixture(
             controller: controller,
@@ -1194,6 +1445,7 @@ private struct ControllerFixture {
 
 private enum PlaybackApplicationControllerTestError: Error {
     case missingStatus
+    case missingSubtitleText
 }
 
 private final class PlaybackStatusReader: @unchecked Sendable {
@@ -1253,6 +1505,33 @@ private final class FakeMediaOpening: MediaOpening, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return body()
+    }
+}
+
+private final class FakeSubtitleAssetReader: PlaybackSubtitleAssetReading, @unchecked Sendable {
+    private let assets: [MediaFileID: [PlaybackSubtitleAsset]]
+
+    init(assets: [MediaFileID: [PlaybackSubtitleAsset]]) {
+        self.assets = assets
+    }
+
+    func fetchPlaybackSubtitleAssets(mediaFileID: MediaFileID) throws -> [PlaybackSubtitleAsset] {
+        assets[mediaFileID] ?? []
+    }
+}
+
+private final class FakeSubtitleFileLoader: PlaybackSubtitleFileLoading, @unchecked Sendable {
+    private let textsByPath: [String: String]
+
+    init(textsByPath: [String: String]) {
+        self.textsByPath = textsByPath
+    }
+
+    func loadSubtitleText(from url: URL) throws -> String {
+        guard let text = textsByPath[url.path] else {
+            throw PlaybackApplicationControllerTestError.missingSubtitleText
+        }
+        return text
     }
 }
 
@@ -1515,6 +1794,25 @@ private func makeApplicationPlayableFile(
         url: URL(fileURLWithPath: "/tmp/\(name).mkv"),
         displayName: "\(name).mkv",
         resumePositionMS: resumePositionMS
+    )
+}
+
+private func playbackSubtitleAsset(
+    id: SubtitleAssetID,
+    format: SubtitleFormat,
+    displayName: String,
+    relativePath: String,
+    folderRootPath: String = "/tmp",
+    isAvailable: Bool = true
+) -> PlaybackSubtitleAsset {
+    PlaybackSubtitleAsset(
+        id: id,
+        format: format,
+        languageCode: nil,
+        displayName: displayName,
+        relativePath: relativePath,
+        folderRootPath: folderRootPath,
+        isAvailable: isAvailable
     )
 }
 

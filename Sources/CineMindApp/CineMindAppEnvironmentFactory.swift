@@ -135,7 +135,8 @@ enum CineMindAppEnvironmentFactory {
         let controller = PlaybackApplicationController(
             coordinator: coordinator,
             progressCoordinator: progressCoordinator,
-            mediaOpening: OpenMediaUseCase(store: store)
+            mediaOpening: OpenMediaUseCase(store: store),
+            subtitleAssetReader: store
         )
         return CineMindPlaybackRuntime(
             backend: backend,

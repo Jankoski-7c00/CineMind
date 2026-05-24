@@ -100,11 +100,24 @@ public final class AVFoundationPlaybackBackend: PlaybackBackend, @unchecked Send
         eventHub.emit(.stateChanged(.idle))
     }
 
-    public func selectAudioTrack(trackID: String) async throws {}
+    public func selectAudioTrack(trackID: String) async throws {
+        try selectMediaOption(trackID: trackID, type: .audio)
+    }
 
-    public func selectSubtitleTrack(trackID: String) async throws {}
+    public func selectSubtitleTrack(trackID: String) async throws {
+        try selectMediaOption(trackID: trackID, type: .subtitle)
+    }
 
-    public func disableSubtitle() async throws {}
+    public func disableSubtitle() async throws {
+        let selection = try currentMediaSelection(type: .subtitle)
+        guard let item = selection.item,
+              let group = selection.group else {
+            return
+        }
+
+        item.select(nil, in: group)
+        emitTracksDiscovered(item: item, generation: selection.generation)
+    }
 
     public func shutdown() async {
         let cleanup = shutdownPlayback()
@@ -283,6 +296,7 @@ public final class AVFoundationPlaybackBackend: PlaybackBackend, @unchecked Send
         case .readyToPlay:
             emitDurationIfChanged(item.duration, generation: generation)
             seekToPendingResumePositionIfNeeded(item: item, generation: generation)
+            emitTracksDiscovered(item: item, generation: generation)
             emitReady(generation: generation)
         case .failed:
             emitFailure(Self.playbackError(from: item.error), generation: generation)
@@ -449,6 +463,107 @@ public final class AVFoundationPlaybackBackend: PlaybackBackend, @unchecked Send
         }
     }
 
+    private func selectMediaOption(trackID: String, type: PlaybackTrackType) throws {
+        let selection = try currentMediaSelection(type: type)
+        guard let item = selection.item,
+              let group = selection.group,
+              let option = selection.options[trackID] else {
+            return
+        }
+
+        item.select(option, in: group)
+        emitTracksDiscovered(item: item, generation: selection.generation)
+    }
+
+    private func currentMediaSelection(type: PlaybackTrackType) throws -> CurrentMediaSelection {
+        try withLock {
+            guard !state.isShutdown else {
+                throw PlaybackError.invalidState("playback backend has shut down")
+            }
+
+            guard let item = state.item else {
+                throw PlaybackError.invalidState("playback backend has no active item")
+            }
+
+            switch type {
+            case .audio:
+                return CurrentMediaSelection(
+                    item: item,
+                    group: state.audioSelectionGroup,
+                    options: state.audioOptionsByID,
+                    generation: state.generation
+                )
+            case .subtitle:
+                return CurrentMediaSelection(
+                    item: item,
+                    group: state.subtitleSelectionGroup,
+                    options: state.subtitleOptionsByID,
+                    generation: state.generation
+                )
+            }
+        }
+    }
+
+    private func emitTracksDiscovered(item: AVPlayerItem, generation: UInt64) {
+        let audioGroup = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible)
+        let subtitleGroup = item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible)
+        let audio = Self.tracksAndOptions(
+            group: audioGroup,
+            selectedOption: audioGroup.flatMap { item.currentMediaSelection.selectedMediaOption(in: $0) },
+            type: .audio,
+            idPrefix: "audio"
+        )
+        let subtitle = Self.tracksAndOptions(
+            group: subtitleGroup,
+            selectedOption: subtitleGroup.flatMap { item.currentMediaSelection.selectedMediaOption(in: $0) },
+            type: .subtitle,
+            idPrefix: "subtitle"
+        )
+
+        let shouldEmit = withLock {
+            guard state.isActive(generation), !state.didFinish else {
+                return false
+            }
+
+            state.audioSelectionGroup = audioGroup
+            state.subtitleSelectionGroup = subtitleGroup
+            state.audioOptionsByID = audio.optionsByID
+            state.subtitleOptionsByID = subtitle.optionsByID
+            return true
+        }
+
+        if shouldEmit {
+            eventHub.emit(.tracksDiscovered(audioTracks: audio.tracks, subtitleTracks: subtitle.tracks))
+        }
+    }
+
+    private static func tracksAndOptions(
+        group: AVMediaSelectionGroup?,
+        selectedOption: AVMediaSelectionOption?,
+        type: PlaybackTrackType,
+        idPrefix: String
+    ) -> (tracks: [PlaybackTrack], optionsByID: [String: AVMediaSelectionOption]) {
+        guard let group else {
+            return ([], [:])
+        }
+
+        var optionsByID: [String: AVMediaSelectionOption] = [:]
+        let playableOptions = group.options.filter(\.isPlayable)
+        let tracks = playableOptions.enumerated().map { index, option in
+            let id = "\(idPrefix)-\(index + 1)"
+            optionsByID[id] = option
+            return PlaybackTrack(
+                id: id,
+                type: type,
+                language: option.extendedLanguageTag ?? option.locale?.identifier,
+                title: option.displayName,
+                isDefault: group.defaultOption == option,
+                isSelected: selectedOption == option
+            )
+        }
+        return (tracks, optionsByID)
+    }
+
     private func emitFailure(_ error: PlaybackError, generation: UInt64) {
         let shouldEmit = withLock {
             guard state.isActive(generation), !state.didFinish else {
@@ -536,6 +651,10 @@ private struct BackendState {
     var generation: UInt64 = 0
     var player: AVPlayer?
     var item: AVPlayerItem?
+    var audioSelectionGroup: AVMediaSelectionGroup?
+    var subtitleSelectionGroup: AVMediaSelectionGroup?
+    var audioOptionsByID: [String: AVMediaSelectionOption] = [:]
+    var subtitleOptionsByID: [String: AVMediaSelectionOption] = [:]
     var itemStatusObservation: NSKeyValueObservation?
     var timeControlStatusObservation: NSKeyValueObservation?
     var durationObservation: NSKeyValueObservation?
@@ -569,6 +688,10 @@ private struct BackendState {
     mutating func clearPlayback() {
         player = nil
         item = nil
+        audioSelectionGroup = nil
+        subtitleSelectionGroup = nil
+        audioOptionsByID = [:]
+        subtitleOptionsByID = [:]
         itemStatusObservation = nil
         timeControlStatusObservation = nil
         durationObservation = nil
@@ -582,6 +705,13 @@ private struct BackendState {
         lastDurationMS = nil
         lastState = nil
     }
+}
+
+private struct CurrentMediaSelection {
+    let item: AVPlayerItem?
+    let group: AVMediaSelectionGroup?
+    let options: [String: AVMediaSelectionOption]
+    let generation: UInt64
 }
 
 private struct ObserverCleanup {

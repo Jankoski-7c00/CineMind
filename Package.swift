@@ -17,6 +17,7 @@ let package = Package(
         .library(name: "Playback", targets: ["Playback"]),
         .library(name: "PlaybackAVFoundation", targets: ["PlaybackAVFoundation"]),
         .library(name: "Metadata", targets: ["Metadata"]),
+        .library(name: "Subtitle", targets: ["Subtitle"]),
         .executable(name: "CineMindApp", targets: ["CineMindApp"]),
         .executable(name: "CineMindShell", targets: ["CineMindShell"]),
         .executable(name: "CineMindAVFoundationPlaybackSpike", targets: ["CineMindAVFoundationPlaybackSpike"]),
@@ -41,7 +42,7 @@ let package = Package(
         ),
         .target(
             name: "Scanner",
-            dependencies: ["Domain", "Persistence", "Shared"]
+            dependencies: ["Domain", "Persistence", "Shared", "Subtitle"]
         ),
         .target(
             name: "Playback",
@@ -59,8 +60,12 @@ let package = Package(
             dependencies: ["Domain", "Shared"]
         ),
         .target(
+            name: "Subtitle",
+            dependencies: ["Domain", "Shared"]
+        ),
+        .target(
             name: "Application",
-            dependencies: ["Domain", "Persistence", "Playback", "Metadata", "Shared"]
+            dependencies: ["Domain", "Persistence", "Playback", "Metadata", "Subtitle", "Shared"]
         ),
         .executableTarget(
             name: "CineMindApp",
@@ -109,6 +114,10 @@ let package = Package(
         .testTarget(
             name: "MetadataTests",
             dependencies: ["Metadata", "Domain"]
+        ),
+        .testTarget(
+            name: "SubtitleTests",
+            dependencies: ["Subtitle", "Domain"]
         ),
         .testTarget(
             name: "CineMindMetadataShellTests",

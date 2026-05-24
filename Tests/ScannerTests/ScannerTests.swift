@@ -322,6 +322,104 @@ final class ScannerTests: XCTestCase {
         XCTAssertEqual(try context.store.fetchMediaItems().count, 0)
         XCTAssertEqual(try context.store.fetchMediaFiles(libraryFolderID: context.folder.id).count, 0)
     }
+
+    func testSidecarSubtitlesAreDiscoveredWithoutCountingAsMediaFiles() throws {
+        let context = try makeContext()
+        context.fileSystem.filesByRoot[context.folder.rootPath] = [
+            scanned(root: context.folder.rootPath, relative: "Arrival (2016).mkv", size: 100),
+            scanned(root: context.folder.rootPath, relative: "Arrival (2016).en.srt", size: 10),
+            scanned(root: context.folder.rootPath, relative: "Arrival (2016).zh-Hans.vtt", size: 11),
+            scanned(root: context.folder.rootPath, relative: "Arrival (2016).commentary.ass", size: 12),
+            scanned(root: context.folder.rootPath, relative: "Unmatched.en.srt", size: 13)
+        ]
+
+        let result = try context.scanner.scanLibrary(libraryID: context.library.id)
+
+        let mediaFiles = try context.store.fetchMediaFiles(libraryFolderID: context.folder.id)
+        let subtitleAssets = try context.store.fetchSubtitleAssets(libraryFolderID: context.folder.id)
+        XCTAssertEqual(result.scanRun.filesSeen, 1)
+        XCTAssertScanCounts(
+            result.counts,
+            foldersScanned: 1,
+            filesDiscovered: 1,
+            mediaItemsCreated: 1,
+            mediaItemsUpdated: 0,
+            mediaFilesCreated: 1,
+            mediaFilesUpdated: 0,
+            filesMarkedUnavailable: 0,
+            subtitlesDiscovered: 4,
+            subtitlesCreated: 3,
+            subtitlesUpdated: 0,
+            subtitlesMarkedUnavailable: 0,
+            issuesRecorded: 0
+        )
+        XCTAssertEqual(mediaFiles.map(\.relativePath), ["Arrival (2016).mkv"])
+        XCTAssertEqual(subtitleAssets.count, 3)
+        XCTAssertEqual(Set(subtitleAssets.map(\.format)), [.srt, .webVTT, .ass])
+        XCTAssertTrue(subtitleAssets.contains { $0.relativePath == "Arrival (2016).en.srt" && $0.languageCode == "en" })
+        XCTAssertTrue(subtitleAssets.contains { $0.relativePath == "Arrival (2016).zh-Hans.vtt" && $0.languageCode == "zh-Hans" })
+        XCTAssertFalse(subtitleAssets.contains { $0.relativePath == "Unmatched.en.srt" })
+    }
+
+    func testRepeatedScanUpdatesExistingSubtitleAsset() throws {
+        let context = try makeContext()
+        context.fileSystem.filesByRoot[context.folder.rootPath] = [
+            scanned(root: context.folder.rootPath, relative: "Moon (2009).mkv", size: 100),
+            scanned(root: context.folder.rootPath, relative: "Moon (2009).en.srt", size: 10)
+        ]
+        _ = try context.scanner.scanLibrary(libraryID: context.library.id)
+
+        let second = try context.scanner.scanLibrary(libraryID: context.library.id)
+
+        XCTAssertScanCounts(
+            second.counts,
+            foldersScanned: 1,
+            filesDiscovered: 1,
+            mediaItemsCreated: 0,
+            mediaItemsUpdated: 0,
+            mediaFilesCreated: 0,
+            mediaFilesUpdated: 1,
+            filesMarkedUnavailable: 0,
+            subtitlesDiscovered: 1,
+            subtitlesCreated: 0,
+            subtitlesUpdated: 1,
+            subtitlesMarkedUnavailable: 0,
+            issuesRecorded: 0
+        )
+        XCTAssertEqual(try context.store.fetchSubtitleAssets(libraryFolderID: context.folder.id).count, 1)
+    }
+
+    func testMissingSubtitleSidecarIsMarkedUnavailable() throws {
+        let context = try makeContext()
+        context.fileSystem.filesByRoot[context.folder.rootPath] = [
+            scanned(root: context.folder.rootPath, relative: "Moon (2009).mkv", size: 100),
+            scanned(root: context.folder.rootPath, relative: "Moon (2009).en.srt", size: 10)
+        ]
+        _ = try context.scanner.scanLibrary(libraryID: context.library.id)
+
+        context.fileSystem.filesByRoot[context.folder.rootPath] = [
+            scanned(root: context.folder.rootPath, relative: "Moon (2009).mkv", size: 100)
+        ]
+        let second = try context.scanner.scanLibrary(libraryID: context.library.id)
+
+        let subtitle = try XCTUnwrap(context.store.fetchSubtitleAssets(libraryFolderID: context.folder.id).first)
+        XCTAssertScanCounts(
+            second.counts,
+            foldersScanned: 1,
+            filesDiscovered: 1,
+            mediaItemsCreated: 0,
+            mediaItemsUpdated: 0,
+            mediaFilesCreated: 0,
+            mediaFilesUpdated: 1,
+            filesMarkedUnavailable: 0,
+            subtitlesDiscovered: 0,
+            subtitlesCreated: 0,
+            subtitlesUpdated: 0,
+            subtitlesMarkedUnavailable: 1,
+            issuesRecorded: 0
+        )
+        XCTAssertFalse(subtitle.isAvailable)
+    }
 }
 
 private func makeContext() throws -> ScannerTestContext {
@@ -401,6 +499,10 @@ private func XCTAssertScanCounts(
     mediaFilesCreated: Int,
     mediaFilesUpdated: Int,
     filesMarkedUnavailable: Int,
+    subtitlesDiscovered: Int = 0,
+    subtitlesCreated: Int = 0,
+    subtitlesUpdated: Int = 0,
+    subtitlesMarkedUnavailable: Int = 0,
     issuesRecorded: Int,
     file: StaticString = #filePath,
     line: UInt = #line
@@ -412,5 +514,15 @@ private func XCTAssertScanCounts(
     XCTAssertEqual(counts.mediaFilesCreated, mediaFilesCreated, "mediaFilesCreated", file: file, line: line)
     XCTAssertEqual(counts.mediaFilesUpdated, mediaFilesUpdated, "mediaFilesUpdated", file: file, line: line)
     XCTAssertEqual(counts.filesMarkedUnavailable, filesMarkedUnavailable, "filesMarkedUnavailable", file: file, line: line)
+    XCTAssertEqual(counts.subtitlesDiscovered, subtitlesDiscovered, "subtitlesDiscovered", file: file, line: line)
+    XCTAssertEqual(counts.subtitlesCreated, subtitlesCreated, "subtitlesCreated", file: file, line: line)
+    XCTAssertEqual(counts.subtitlesUpdated, subtitlesUpdated, "subtitlesUpdated", file: file, line: line)
+    XCTAssertEqual(
+        counts.subtitlesMarkedUnavailable,
+        subtitlesMarkedUnavailable,
+        "subtitlesMarkedUnavailable",
+        file: file,
+        line: line
+    )
     XCTAssertEqual(counts.issuesRecorded, issuesRecorded, "issuesRecorded", file: file, line: line)
 }

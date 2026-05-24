@@ -2,6 +2,7 @@ import Domain
 import Foundation
 import Persistence
 import Shared
+import Subtitle
 
 public struct ScannedFile: Sendable, Equatable {
     public var relativePath: String
@@ -216,30 +217,42 @@ public struct ScanResult: Sendable, Equatable {
 public struct ScanCounts: Sendable, Equatable {
     public var foldersScanned: Int
     public var filesDiscovered: Int
+    public var subtitlesDiscovered: Int
     public var mediaItemsCreated: Int
     public var mediaItemsUpdated: Int
     public var mediaFilesCreated: Int
     public var mediaFilesUpdated: Int
     public var filesMarkedUnavailable: Int
+    public var subtitlesCreated: Int
+    public var subtitlesUpdated: Int
+    public var subtitlesMarkedUnavailable: Int
     public var issuesRecorded: Int
 
     public init(
         foldersScanned: Int = 0,
         filesDiscovered: Int = 0,
+        subtitlesDiscovered: Int = 0,
         mediaItemsCreated: Int = 0,
         mediaItemsUpdated: Int = 0,
         mediaFilesCreated: Int = 0,
         mediaFilesUpdated: Int = 0,
         filesMarkedUnavailable: Int = 0,
+        subtitlesCreated: Int = 0,
+        subtitlesUpdated: Int = 0,
+        subtitlesMarkedUnavailable: Int = 0,
         issuesRecorded: Int = 0
     ) {
         self.foldersScanned = foldersScanned
         self.filesDiscovered = filesDiscovered
+        self.subtitlesDiscovered = subtitlesDiscovered
         self.mediaItemsCreated = mediaItemsCreated
         self.mediaItemsUpdated = mediaItemsUpdated
         self.mediaFilesCreated = mediaFilesCreated
         self.mediaFilesUpdated = mediaFilesUpdated
         self.filesMarkedUnavailable = filesMarkedUnavailable
+        self.subtitlesCreated = subtitlesCreated
+        self.subtitlesUpdated = subtitlesUpdated
+        self.subtitlesMarkedUnavailable = subtitlesMarkedUnavailable
         self.issuesRecorded = issuesRecorded
     }
 }
@@ -314,8 +327,16 @@ public final class LibraryScanner {
                 }
 
                 let mediaFiles = files.filter { supportedExtensions.contains($0.fileExtension.lowercased()) }
+                let subtitleFiles = files.filter {
+                    SubtitleSidecarMatcher.isDiscoverableSubtitleExtension($0.fileExtension)
+                }
                 let counters = try store.withTransaction {
-                    try process(folder: folder, files: mediaFiles, scanRunID: scanRun.id)
+                    try process(
+                        folder: folder,
+                        mediaFiles: mediaFiles,
+                        subtitleFiles: subtitleFiles,
+                        scanRunID: scanRun.id
+                    )
                 }
                 totals.merge(counters)
             }
@@ -333,10 +354,19 @@ public final class LibraryScanner {
         }
     }
 
-    private func process(folder: LibraryFolder, files: [ScannedFile], scanRunID: String) throws -> ScanCounters {
+    private func process(
+        folder: LibraryFolder,
+        mediaFiles files: [ScannedFile],
+        subtitleFiles: [ScannedFile],
+        scanRunID: String
+    ) throws -> ScanCounters {
         let timestamp = now()
         let existingFiles = try store.fetchMediaFiles(libraryFolderID: folder.id)
-        var counters = ScanCounters(foldersScanned: 1, filesDiscovered: files.count)
+        var counters = ScanCounters(
+            foldersScanned: 1,
+            filesDiscovered: files.count,
+            subtitlesDiscovered: subtitleFiles.count
+        )
         var seenRelativePaths = Set<String>()
         var newFiles: [MediaFile] = []
 
@@ -398,6 +428,14 @@ public final class LibraryScanner {
             timestamp: timestamp
         )
 
+        counters.merge(
+            try processSubtitleFiles(
+                folder: folder,
+                subtitleFiles: subtitleFiles,
+                timestamp: timestamp
+            )
+        )
+
         try store.updateLibraryFolderAvailability(
             id: folder.id,
             isAvailable: true,
@@ -437,6 +475,97 @@ public final class LibraryScanner {
         )
         try store.saveMediaItem(item)
         return MediaItemResolution(item: item, created: true)
+    }
+
+    private func processSubtitleFiles(
+        folder: LibraryFolder,
+        subtitleFiles: [ScannedFile],
+        timestamp: Date
+    ) throws -> ScanCounters {
+        let availableMediaFiles = try store.fetchMediaFiles(libraryFolderID: folder.id)
+            .filter(\.isAvailable)
+            .map {
+                SubtitleSidecarMediaFile(
+                    mediaItemID: $0.mediaItemID,
+                    mediaFileID: $0.id,
+                    libraryFolderID: $0.libraryFolderID,
+                    relativePath: $0.relativePath
+                )
+            }
+        let existingSubtitleAssets = try store.fetchSubtitleAssets(libraryFolderID: folder.id)
+        var counters = ScanCounters()
+        var seenSubtitleRelativePaths = Set<String>()
+
+        for subtitleFile in subtitleFiles {
+            seenSubtitleRelativePaths.insert(subtitleFile.relativePath)
+            guard let format = SubtitleFormat(fileExtension: subtitleFile.fileExtension),
+                  let match = SubtitleSidecarMatcher.match(
+                      subtitleRelativePath: subtitleFile.relativePath,
+                      mediaFiles: availableMediaFiles
+                  ) else {
+                continue
+            }
+
+            if var existing = try store.fetchSubtitleAsset(
+                libraryFolderID: folder.id,
+                relativePath: subtitleFile.relativePath,
+                source: .external
+            ) {
+                existing.mediaItemID = match.mediaFile.mediaItemID
+                existing.mediaFileID = match.mediaFile.mediaFileID
+                existing.libraryFolderID = folder.id
+                existing.fileName = subtitleFile.fileName
+                existing.fileExtension = subtitleFile.fileExtension
+                existing.format = format
+                existing.languageCode = match.languageCode
+                existing.displayName = displayName(for: subtitleFile, languageCode: match.languageCode)
+                existing.isAvailable = true
+                existing.lastSeenAt = timestamp
+                existing.updatedAt = timestamp
+                try store.saveSubtitleAsset(existing)
+                counters.subtitlesUpdated += 1
+                continue
+            }
+
+            let asset = SubtitleAsset(
+                mediaItemID: match.mediaFile.mediaItemID,
+                mediaFileID: match.mediaFile.mediaFileID,
+                libraryFolderID: folder.id,
+                relativePath: subtitleFile.relativePath,
+                fileName: subtitleFile.fileName,
+                fileExtension: subtitleFile.fileExtension,
+                format: format,
+                languageCode: match.languageCode,
+                displayName: displayName(for: subtitleFile, languageCode: match.languageCode),
+                source: .external,
+                isAvailable: true,
+                lastSeenAt: timestamp,
+                createdAt: timestamp,
+                updatedAt: timestamp
+            )
+            try store.saveSubtitleAsset(asset)
+            counters.subtitlesCreated += 1
+        }
+
+        let missingAssets = existingSubtitleAssets.filter {
+            $0.isAvailable
+                && $0.source == .external
+                && !seenSubtitleRelativePaths.contains($0.relativePath)
+        }
+        for asset in missingAssets {
+            try store.markSubtitleAssetUnavailable(id: asset.id, updatedAt: timestamp)
+            counters.subtitlesMarkedUnavailable += 1
+        }
+
+        return counters
+    }
+
+    private func displayName(for file: ScannedFile, languageCode: String?) -> String {
+        let baseName = (file.fileName as NSString).deletingPathExtension
+        guard let languageCode, !languageCode.isEmpty else {
+            return baseName
+        }
+        return "\(languageCode.uppercased()) - \(baseName)"
     }
 
     private func recordRenameCandidates(
@@ -515,22 +644,30 @@ private struct MediaItemResolution {
 private struct ScanCounters {
     var foldersScanned: Int = 0
     var filesDiscovered: Int = 0
+    var subtitlesDiscovered: Int = 0
     var mediaItemsCreated: Int = 0
     var mediaItemsUpdated: Int = 0
     var mediaFilesCreated: Int = 0
     var mediaFilesUpdated: Int = 0
     var filesMarkedUnavailable: Int = 0
+    var subtitlesCreated: Int = 0
+    var subtitlesUpdated: Int = 0
+    var subtitlesMarkedUnavailable: Int = 0
     var issuesRecorded: Int = 0
 
     var scanCounts: ScanCounts {
         ScanCounts(
             foldersScanned: foldersScanned,
             filesDiscovered: filesDiscovered,
+            subtitlesDiscovered: subtitlesDiscovered,
             mediaItemsCreated: mediaItemsCreated,
             mediaItemsUpdated: mediaItemsUpdated,
             mediaFilesCreated: mediaFilesCreated,
             mediaFilesUpdated: mediaFilesUpdated,
             filesMarkedUnavailable: filesMarkedUnavailable,
+            subtitlesCreated: subtitlesCreated,
+            subtitlesUpdated: subtitlesUpdated,
+            subtitlesMarkedUnavailable: subtitlesMarkedUnavailable,
             issuesRecorded: issuesRecorded
         )
     }
@@ -538,11 +675,15 @@ private struct ScanCounters {
     mutating func merge(_ other: ScanCounters) {
         foldersScanned += other.foldersScanned
         filesDiscovered += other.filesDiscovered
+        subtitlesDiscovered += other.subtitlesDiscovered
         mediaItemsCreated += other.mediaItemsCreated
         mediaItemsUpdated += other.mediaItemsUpdated
         mediaFilesCreated += other.mediaFilesCreated
         mediaFilesUpdated += other.mediaFilesUpdated
         filesMarkedUnavailable += other.filesMarkedUnavailable
+        subtitlesCreated += other.subtitlesCreated
+        subtitlesUpdated += other.subtitlesUpdated
+        subtitlesMarkedUnavailable += other.subtitlesMarkedUnavailable
         issuesRecorded += other.issuesRecorded
     }
 }

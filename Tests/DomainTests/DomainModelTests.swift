@@ -256,4 +256,27 @@ final class DomainModelTests: XCTestCase {
         XCTAssertEqual(history.mediaFileID, "media-file-1")
         XCTAssertNotEqual(history.mediaItemID, history.mediaFileID)
     }
+
+    func testSubtitleAssetStoresExternalSidecarMetadata() {
+        let asset = SubtitleAsset(
+            id: "subtitle-1",
+            mediaItemID: "media-item-1",
+            mediaFileID: "media-file-1",
+            libraryFolderID: "folder-1",
+            relativePath: "Arrival.en.srt",
+            fileName: "Arrival.en.srt",
+            fileExtension: "SRT",
+            format: .srt,
+            languageCode: "en",
+            displayName: "English",
+            source: .external,
+            isAvailable: true
+        )
+
+        XCTAssertEqual(asset.fileExtension, "srt")
+        XCTAssertEqual(asset.format, .srt)
+        XCTAssertEqual(asset.languageCode, "en")
+        XCTAssertEqual(asset.source, .external)
+        XCTAssertTrue(asset.isAvailable)
+    }
 }

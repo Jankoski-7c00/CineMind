@@ -704,12 +704,18 @@ public struct LibraryItemDetailView: View {
         if let status = playbackStatus(for: detail) {
             VStack(alignment: .leading, spacing: 10) {
                 if let playbackSurface {
-                    playbackSurface
-                        .id("playback-surface")
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 320)
-                        .background(Color.black)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    ZStack(alignment: .bottom) {
+                        playbackSurface
+                            .id("playback-surface")
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 320)
+                            .background(Color.black)
+
+                        if let subtitleText = status.activeSubtitleText {
+                            subtitleOverlay(text: subtitleText)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -858,7 +864,7 @@ public struct LibraryItemDetailView: View {
                 } label: {
                     trackMenuItemLabel(track.displayLabel, isSelected: track.isSelected)
                 }
-                .disabled(!isEnabled || track.isSelected)
+                .disabled(!isEnabled || track.isSelected || !track.isSelectable)
             }
         } label: {
             Label("Subtitles", systemImage: "captions.bubble")
@@ -877,6 +883,19 @@ public struct LibraryItemDetailView: View {
                 Image(systemName: "checkmark")
             }
         }
+    }
+
+    private func subtitleOverlay(text: String) -> some View {
+        Text(text)
+            .font(.title3.weight(.semibold))
+            .multilineTextAlignment(.center)
+            .foregroundColor(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 24)
+            .padding(.bottom, 18)
+            .shadow(radius: 2)
     }
 
     private func trackSelectionEnabled(_ state: PlaybackApplicationState) -> Bool {
