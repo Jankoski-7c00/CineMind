@@ -30,6 +30,9 @@ public struct LibraryMetadataDetail: Sendable, Equatable {
     public let summary: String?
     public let languageLabel: String?
     public let releaseOrAirDateLabel: String?
+    public let titleOverrideLocked: Bool
+    public let summaryOverrideLocked: Bool
+    public let languageOverrideLocked: Bool
     public let source: LibraryMetadataSourceDetail?
 }
 
@@ -298,6 +301,9 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
             summary: trimmedLabel(metadataItem?.summary),
             languageLabel: trimmedLabel(metadataItem?.language),
             releaseOrAirDateLabel: releaseOrAirDateLabel(for: metadataItem),
+            titleOverrideLocked: metadataItem?.titleOverrideLocked ?? false,
+            summaryOverrideLocked: metadataItem?.summaryOverrideLocked ?? false,
+            languageOverrideLocked: metadataItem?.languageOverrideLocked ?? false,
             source: sourceRecord.map(mapMetadataSource)
         )
     }

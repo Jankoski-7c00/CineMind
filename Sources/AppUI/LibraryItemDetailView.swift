@@ -17,6 +17,13 @@ public enum PosterImageState: Sendable {
     case placeholder(PosterImagePlaceholderReason)
 }
 
+public enum MetadataActionStatus: Equatable, Sendable {
+    case idle
+    case loading(String)
+    case success(String)
+    case error(String)
+}
+
 private enum FilePlaybackButtonState {
     case play
     case resume
@@ -56,9 +63,15 @@ public final class LibraryItemDetailViewModel: ObservableObject {
     @Published public private(set) var detailState: DetailState = .empty
     @Published public private(set) var posterImageState: PosterImageState = .idle
     @Published public private(set) var playbackStatus: PlaybackApplicationStatus = .idle
+    @Published public private(set) var metadataActionStatus: MetadataActionStatus = .idle
+    @Published public private(set) var metadataCandidates: [LibraryMetadataCandidate] = []
+    @Published public private(set) var isSearchingMetadataCandidates = false
+    @Published public private(set) var metadataMutationRevision = 0
 
     private let detailBrowser: any LibraryItemDetailBrowsing
     private let posterImageLoader: any PosterImageLoading
+    private let metadataActions: (any LibraryMetadataActionHandling)?
+    public let metadataActionsUnavailableMessage: String?
     private var playbackController: (any PlaybackApplicationControlling)?
     private var playbackStatusTask: Task<Void, Never>?
     private var currentItemID: MediaItemID?
@@ -66,10 +79,14 @@ public final class LibraryItemDetailViewModel: ObservableObject {
 
     public init(
         detailBrowser: any LibraryItemDetailBrowsing,
-        playbackController: (any PlaybackApplicationControlling)? = nil
+        playbackController: (any PlaybackApplicationControlling)? = nil,
+        metadataActions: (any LibraryMetadataActionHandling)? = nil,
+        metadataActionsUnavailableMessage: String? = nil
     ) {
         self.detailBrowser = detailBrowser
         self.posterImageLoader = LocalPosterImageLoader()
+        self.metadataActions = metadataActions
+        self.metadataActionsUnavailableMessage = metadataActionsUnavailableMessage
         setPlaybackController(playbackController)
     }
 
@@ -107,6 +124,9 @@ public final class LibraryItemDetailViewModel: ObservableObject {
             detail = nil
             detailState = .empty
             posterImageState = .idle
+            metadataActionStatus = .idle
+            metadataCandidates = []
+            isSearchingMetadataCandidates = false
             return
         }
 
@@ -142,6 +162,85 @@ public final class LibraryItemDetailViewModel: ObservableObject {
     public func retry() {
         guard let id = currentItemID else { return }
         Task { await loadDetail(for: id) }
+    }
+
+    public var metadataActionsAvailable: Bool {
+        metadataActions != nil
+    }
+
+    public func refreshMetadata() {
+        runMetadataMutation(loadingMessage: "Refreshing metadata...") { actions, mediaItemID in
+            try await actions.refreshMetadata(mediaItemID: mediaItemID)
+        }
+    }
+
+    public func searchMetadataCandidates() {
+        guard let metadataActions, let currentItemID else {
+            metadataActionStatus = .error(metadataUnavailableMessage)
+            return
+        }
+
+        metadataActionStatus = .loading("Searching metadata...")
+        metadataCandidates = []
+        isSearchingMetadataCandidates = true
+
+        Task {
+            do {
+                let candidates = try await metadataActions.searchMetadataCandidates(
+                    mediaItemID: currentItemID
+                )
+                metadataCandidates = candidates
+                metadataActionStatus = .success(
+                    candidates.isEmpty
+                        ? "No metadata candidates found."
+                        : "\(candidates.count) metadata candidates found."
+                )
+            } catch {
+                metadataCandidates = []
+                metadataActionStatus = .error(actionErrorMessage(error))
+            }
+            isSearchingMetadataCandidates = false
+        }
+    }
+
+    public func rematchMetadata(providerID: String) {
+        runMetadataMutation(loadingMessage: "Saving metadata match...") { actions, mediaItemID in
+            try await actions.rematchMetadata(
+                mediaItemID: mediaItemID,
+                providerID: providerID
+            )
+        }
+    }
+
+    public func setMetadataOverride(
+        field: MetadataOverrideField,
+        value: String?
+    ) {
+        runMetadataMutation(loadingMessage: "Saving metadata override...") { actions, mediaItemID in
+            try await actions.setMetadataOverride(
+                mediaItemID: mediaItemID,
+                field: field,
+                value: value
+            )
+        }
+    }
+
+    public func clearMetadataOverride(field: MetadataOverrideField) {
+        runMetadataMutation(loadingMessage: "Clearing metadata override...") { actions, mediaItemID in
+            try await actions.clearMetadataOverride(
+                mediaItemID: mediaItemID,
+                field: field
+            )
+        }
+    }
+
+    public func selectPoster(posterAssetID: PosterAssetID) {
+        runMetadataMutation(loadingMessage: "Selecting poster...") { actions, mediaItemID in
+            try await actions.selectPoster(
+                mediaItemID: mediaItemID,
+                posterAssetID: posterAssetID
+            )
+        }
     }
 
     public func playFile(mediaFileID: MediaFileID) {
@@ -265,6 +364,43 @@ public final class LibraryItemDetailViewModel: ObservableObject {
             posterImageState = .placeholder(reason)
         }
     }
+
+    private var metadataUnavailableMessage: String {
+        metadataActionsUnavailableMessage ?? "Metadata actions are unavailable."
+    }
+
+    private func runMetadataMutation(
+        loadingMessage: String,
+        operation: @escaping (
+            any LibraryMetadataActionHandling,
+            MediaItemID
+        ) async throws -> LibraryMetadataActionResult
+    ) {
+        guard let metadataActions, let currentItemID else {
+            metadataActionStatus = .error(metadataUnavailableMessage)
+            return
+        }
+
+        metadataActionStatus = .loading(loadingMessage)
+
+        Task {
+            do {
+                let result = try await operation(metadataActions, currentItemID)
+                metadataActionStatus = .success(result.message)
+                metadataMutationRevision += 1
+                await loadDetail(for: currentItemID)
+            } catch {
+                metadataActionStatus = .error(actionErrorMessage(error))
+            }
+        }
+    }
+
+    private func actionErrorMessage(_ error: Error) -> String {
+        if let actionError = error as? LibraryMetadataActionError {
+            return actionError.message
+        }
+        return error.localizedDescription
+    }
 }
 
 public struct LibraryItemDetailView: View {
@@ -273,7 +409,10 @@ public struct LibraryItemDetailView: View {
 
     @State private var isScrubbing = false
     @State private var scrubPositionMS: Double = 0
-
+    @State private var isRematchSheetPresented = false
+    @State private var titleOverrideText = ""
+    @State private var summaryOverrideText = ""
+    @State private var languageOverrideText = ""
 
     public init(
         viewModel: LibraryItemDetailViewModel,
@@ -300,6 +439,9 @@ public struct LibraryItemDetailView: View {
                     detailContent(detail)
                 }
             }
+        }
+        .sheet(isPresented: $isRematchSheetPresented) {
+            metadataCandidateSheet
         }
     }
 
@@ -349,6 +491,9 @@ public struct LibraryItemDetailView: View {
                 playbackBlock(for: detail)
 
                 Divider()
+                metadataActionsBlock(detail)
+
+                Divider()
                 metadataBlock(detail.metadataDetail)
 
                 Divider()
@@ -365,6 +510,193 @@ public struct LibraryItemDetailView: View {
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func metadataActionsBlock(_ detail: LibraryItemDetailShell) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Metadata Actions")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    viewModel.refreshMetadata()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.small)
+                .disabled(!viewModel.metadataActionsAvailable)
+
+                Button {
+                    isRematchSheetPresented = true
+                    viewModel.searchMetadataCandidates()
+                } label: {
+                    Label("Search Matches", systemImage: "magnifyingglass")
+                }
+                .controlSize(.small)
+                .disabled(!viewModel.metadataActionsAvailable)
+            }
+
+            if let unavailableMessage = viewModel.metadataActionsUnavailableMessage {
+                Label(unavailableMessage, systemImage: "exclamationmark.circle")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+
+            metadataActionStatusView
+            overrideEditor(detail.metadataDetail)
+        }
+        .onAppear {
+            syncOverrideDrafts(from: detail.metadataDetail)
+        }
+        .onChange(of: detail.metadataDetail) { _, metadata in
+            syncOverrideDrafts(from: metadata)
+        }
+    }
+
+    @ViewBuilder
+    private var metadataActionStatusView: some View {
+        switch viewModel.metadataActionStatus {
+        case .idle:
+            EmptyView()
+        case .loading(let message):
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(message)
+                    .foregroundColor(.secondary)
+            }
+            .font(.callout)
+        case .success(let message):
+            Label(message, systemImage: "checkmark.circle")
+                .font(.callout)
+                .foregroundColor(.green)
+        case .error(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.callout)
+                .foregroundColor(.red)
+        }
+    }
+
+    private func overrideEditor(_ metadata: LibraryMetadataDetail) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Overrides")
+                .font(.subheadline)
+
+            overrideRow(
+                label: "Title",
+                text: $titleOverrideText,
+                field: .title,
+                isLocked: metadata.titleOverrideLocked
+            )
+            overrideRow(
+                label: "Summary",
+                text: $summaryOverrideText,
+                field: .summary,
+                isLocked: metadata.summaryOverrideLocked
+            )
+            overrideRow(
+                label: "Language",
+                text: $languageOverrideText,
+                field: .language,
+                isLocked: metadata.languageOverrideLocked
+            )
+        }
+    }
+
+    private func overrideRow(
+        label: String,
+        text: Binding<String>,
+        field: MetadataOverrideField,
+        isLocked: Bool
+    ) -> some View {
+        LabeledContent(label) {
+            HStack(spacing: 8) {
+                TextField(label, text: text)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!viewModel.metadataActionsAvailable)
+
+                Button {
+                    viewModel.setMetadataOverride(field: field, value: text.wrappedValue)
+                } label: {
+                    Label("Save", systemImage: "checkmark")
+                }
+                .controlSize(.small)
+                .disabled(!viewModel.metadataActionsAvailable)
+
+                Button {
+                    viewModel.clearMetadataOverride(field: field)
+                } label: {
+                    Label("Clear", systemImage: "xmark.circle")
+                }
+                .controlSize(.small)
+                .disabled(!viewModel.metadataActionsAvailable || !isLocked)
+            }
+        }
+    }
+
+    private var metadataCandidateSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Metadata Matches")
+                    .font(.headline)
+                Spacer()
+                Button("Done") {
+                    isRematchSheetPresented = false
+                }
+            }
+
+            if viewModel.isSearchingMetadataCandidates {
+                ProgressView("Searching...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.metadataCandidates.isEmpty {
+                Text("No matches found")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(viewModel.metadataCandidates) { candidate in
+                    Button {
+                        isRematchSheetPresented = false
+                        viewModel.rematchMetadata(providerID: candidate.providerID)
+                    } label: {
+                        metadataCandidateRow(candidate)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding()
+        .frame(minWidth: 460, minHeight: 320)
+    }
+
+    private func metadataCandidateRow(_ candidate: LibraryMetadataCandidate) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(candidate.title)
+                    .font(.headline)
+                if let subtitle = candidate.subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                if let overviewPreview = candidate.overviewPreview {
+                    Text(overviewPreview)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer()
+            Text(candidate.confidenceLabel)
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func syncOverrideDrafts(from metadata: LibraryMetadataDetail) {
+        titleOverrideText = metadata.metadataTitle ?? ""
+        summaryOverrideText = metadata.summary ?? ""
+        languageOverrideText = metadata.languageLabel ?? ""
     }
 
     @ViewBuilder
@@ -828,6 +1160,15 @@ public struct LibraryItemDetailView: View {
                 Text(asset.statusLabel)
                     .font(.caption)
                     .foregroundColor(.secondary)
+                if !asset.isSelected {
+                    Button {
+                        viewModel.selectPoster(posterAssetID: asset.id)
+                    } label: {
+                        Label("Select", systemImage: "photo")
+                    }
+                    .controlSize(.small)
+                    .disabled(!viewModel.metadataActionsAvailable)
+                }
             }
 
             Text(asset.remotePath)

@@ -1,6 +1,7 @@
 import AppUI
 import Application
 import Foundation
+import Metadata
 import Playback
 import PlaybackAVFoundation
 import Persistence
@@ -38,7 +39,11 @@ final class CineMindPlaybackRuntime {
 
 enum CineMindAppEnvironmentFactory {
     static func start() throws -> CineMindAppStartupEnvironment {
-        let databaseURL = try databaseURL()
+        let appDirectoryURL = try appDirectoryURL()
+        let databaseURL = appDirectoryURL.appendingPathComponent(
+            "CineMind.sqlite",
+            isDirectory: false
+        )
         let store = try CineMindStore(path: databaseURL.path)
         _ = try store.ensureLibrary(name: "CineMind Library")
         let mediaSummaryBrowser = LibraryMediaSummaryUseCase(store: store)
@@ -50,6 +55,10 @@ enum CineMindAppEnvironmentFactory {
         let libraryScanner = RunLibraryScanUseCase(store: store, runner: scanRunner)
 
         let playbackRuntime = makePlaybackRuntime(store: store)
+        let metadataActionConfiguration = makeMetadataActions(
+            store: store,
+            appDirectoryURL: appDirectoryURL
+        )
         let appShellEnvironment = AppShellEnvironment(
             mediaSummaryBrowser: mediaSummaryBrowser,
             itemDetailBrowser: itemDetailBrowser,
@@ -57,12 +66,63 @@ enum CineMindAppEnvironmentFactory {
             folderPicker: folderPicker,
             folderAdder: folderAdder,
             libraryScanner: libraryScanner,
-            playbackController: playbackRuntime?.controller
+            playbackController: playbackRuntime?.controller,
+            metadataActions: metadataActionConfiguration.actions,
+            metadataActionsUnavailableMessage: metadataActionConfiguration.unavailableMessage
         )
 
         return CineMindAppStartupEnvironment(
             appShellEnvironment: appShellEnvironment,
             playbackRuntime: playbackRuntime
+        )
+    }
+
+    private static func makeMetadataActions(
+        store: CineMindStore,
+        appDirectoryURL: URL
+    ) -> MetadataActionConfiguration {
+        let environment = ProcessInfo.processInfo.environment
+        let token = environment["CINEMIND_TMDB_READ_TOKEN"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !token.isEmpty else {
+            return MetadataActionConfiguration(
+                actions: nil,
+                unavailableMessage: "Set CINEMIND_TMDB_READ_TOKEN to enable metadata actions."
+            )
+        }
+
+        let language = environment["CINEMIND_TMDB_LANGUAGE"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmptyValue ?? "en-US"
+        let httpClient = URLSessionMetadataHTTPClient()
+        let provider = TMDBMetadataProvider(
+            configuration: TMDBMetadataProvider.Configuration(
+                bearerToken: token,
+                defaultLanguage: language
+            ),
+            httpClient: httpClient
+        )
+        let posterCache = LazyTMDBPosterCache(
+            provider: provider,
+            posterCache: PosterCache(
+                configuration: PosterCacheConfiguration(
+                    cacheRoot: appDirectoryURL.appendingPathComponent(
+                        "PosterCache",
+                        isDirectory: true
+                    )
+                ),
+                httpClient: httpClient
+            )
+        )
+
+        return MetadataActionConfiguration(
+            actions: LibraryMetadataActionService(
+                store: store,
+                provider: provider,
+                posterCache: posterCache,
+                language: language
+            ),
+            unavailableMessage: nil
         )
     }
 
@@ -85,7 +145,7 @@ enum CineMindAppEnvironmentFactory {
         )
     }
 
-    private static func databaseURL() throws -> URL {
+    private static func appDirectoryURL() throws -> URL {
         let fileManager = FileManager.default
         guard let applicationSupportURL = fileManager.urls(
             for: .applicationSupportDirectory,
@@ -103,10 +163,7 @@ enum CineMindAppEnvironmentFactory {
             withIntermediateDirectories: true
         )
 
-        return appDirectoryURL.appendingPathComponent(
-            "CineMind.sqlite",
-            isDirectory: false
-        )
+        return appDirectoryURL
     }
 
     static func startupFailureMessage(for error: Error) -> String {
@@ -142,6 +199,58 @@ enum CineMindAppEnvironmentFactory {
     }
 }
 
-private func writeWarning(_ message: String) {
-    FileHandle.standardError.write(Data(("Warning: " + message + "\n").utf8))
+private struct MetadataActionConfiguration {
+    let actions: (any LibraryMetadataActionHandling)?
+    let unavailableMessage: String?
+}
+
+private final class LazyTMDBPosterCache: ApplicationPosterCaching, @unchecked Sendable {
+    private let provider: TMDBMetadataProvider
+    private let posterCache: PosterCache
+    private var imageConfiguration: TMDBImageConfiguration?
+
+    init(provider: TMDBMetadataProvider, posterCache: PosterCache) {
+        self.provider = provider
+        self.posterCache = posterCache
+    }
+
+    func cache(_ image: RemoteImage) async throws -> PosterCacheResult {
+        let configuration: TMDBImageConfiguration
+        if let cachedConfiguration = imageConfiguration {
+            configuration = cachedConfiguration
+        } else {
+            let fetchedConfiguration = try await provider.fetchImageConfiguration()
+            imageConfiguration = fetchedConfiguration
+            configuration = fetchedConfiguration
+        }
+
+        return try await posterCache.cache(image, using: configuration)
+    }
+}
+
+private final class URLSessionMetadataHTTPClient: MetadataHTTPClient {
+    func send(_ request: URLRequest) async throws -> MetadataHTTPResponse {
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw SanitizedHTTPClientError.invalidResponse
+            }
+            return MetadataHTTPResponse(statusCode: httpResponse.statusCode, data: data)
+        } catch let error as SanitizedHTTPClientError {
+            throw error
+        } catch {
+            throw SanitizedHTTPClientError.transportFailure
+        }
+    }
+}
+
+private enum SanitizedHTTPClientError: Error {
+    case invalidResponse
+    case transportFailure
+}
+
+private extension String {
+    var nonEmptyValue: String? {
+        isEmpty ? nil : self
+    }
 }

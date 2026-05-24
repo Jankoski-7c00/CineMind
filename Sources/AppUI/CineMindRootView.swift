@@ -77,7 +77,9 @@ fileprivate struct ReadyShellView: View {
         self.playbackSurface = playbackSurface
         let detailViewModel = LibraryItemDetailViewModel(
             detailBrowser: environment.itemDetailBrowser,
-            playbackController: environment.playbackController
+            playbackController: environment.playbackController,
+            metadataActions: environment.metadataActions,
+            metadataActionsUnavailableMessage: environment.metadataActionsUnavailableMessage
         )
         _browserViewModel = StateObject(wrappedValue:
             LibraryBrowserViewModel(
@@ -110,6 +112,9 @@ fileprivate struct ReadyShellView: View {
             )
                 .onChange(of: browserViewModel.selectedItemID) { _, newID in
                     Task { await detailViewModel.loadDetail(for: newID) }
+                }
+                .onChange(of: detailViewModel.metadataMutationRevision) { _, _ in
+                    Task { await browserViewModel.reloadCurrentSection() }
                 }
         }
     }

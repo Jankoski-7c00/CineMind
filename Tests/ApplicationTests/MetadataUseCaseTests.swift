@@ -53,6 +53,166 @@ final class MetadataUseCaseTests: XCTestCase {
         XCTAssertEqual(try context.store.fetchPosterAssets(mediaItemID: context.item.id), [])
     }
 
+    func testMetadataActionServiceMapsSearchCandidatesForAppUI() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        provider.searchResults = [
+            MetadataCandidate(
+                identifier: movieID(550),
+                displayTitle: "Arrival",
+                originalTitle: "Arrival",
+                year: 2016,
+                overviewPreview: "A linguist works with alien visitors.",
+                confidence: 0.875
+            )
+        ]
+
+        let candidates = try await LibraryMetadataActionService(
+            store: context.store,
+            provider: provider,
+            language: "en-US"
+        ).searchMetadataCandidates(mediaItemID: context.item.id)
+
+        XCTAssertEqual(
+            candidates,
+            [
+                LibraryMetadataCandidate(
+                    providerID: "movie:550",
+                    title: "Arrival",
+                    subtitle: "2016",
+                    overviewPreview: "A linguist works with alien visitors.",
+                    confidenceLabel: "88%"
+                )
+            ]
+        )
+        XCTAssertEqual(provider.searchQueries.first?.language, "en-US")
+        XCTAssertNil(try context.store.fetchMetadataItem(mediaItemID: context.item.id))
+    }
+
+    func testMetadataActionServiceRefreshMapsAutoMatchResultToActionMessage() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        provider.searchResults = [movieCandidate(id: 550, confidence: 0.96)]
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Arrival Matched")
+
+        let result = try await LibraryMetadataActionService(
+            store: context.store,
+            provider: provider
+        ).refreshMetadata(mediaItemID: context.item.id)
+
+        XCTAssertEqual(result.message, "Metadata matched and refreshed.")
+        XCTAssertEqual(
+            try context.store.fetchMetadataItem(mediaItemID: context.item.id)?.title,
+            "Arrival Matched"
+        )
+    }
+
+    func testMetadataActionServiceManualRematchWritesManualLock() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        provider.detailsByID["movie:550"] = movieDetails(id: 550, title: "Manual Arrival")
+
+        let result = try await LibraryMetadataActionService(
+            store: context.store,
+            provider: provider
+        ).rematchMetadata(mediaItemID: context.item.id, providerID: "movie:550")
+
+        XCTAssertEqual(result.message, "Metadata match saved.")
+        let source = try XCTUnwrap(
+            context.store.fetchMetadataSourceRecord(
+                mediaItemID: context.item.id,
+                provider: .tmdb
+            )
+        )
+        XCTAssertEqual(source.providerID, "movie:550")
+        XCTAssertEqual(source.matchSource, .manual)
+        XCTAssertTrue(source.manualMatchLocked)
+    }
+
+    func testMetadataActionServiceSetsAndClearsOverride() async throws {
+        let context = try makeMediaContext()
+        let service = LibraryMetadataActionService(
+            store: context.store,
+            provider: FakeMetadataProvider()
+        )
+
+        let setResult = try await service.setMetadataOverride(
+            mediaItemID: context.item.id,
+            field: .title,
+            value: "Manual Title"
+        )
+
+        XCTAssertEqual(setResult.message, "Title override saved.")
+        var metadata = try XCTUnwrap(
+            context.store.fetchMetadataItem(mediaItemID: context.item.id)
+        )
+        XCTAssertEqual(metadata.title, "Manual Title")
+        XCTAssertTrue(metadata.titleOverrideLocked)
+
+        let clearResult = try await service.clearMetadataOverride(
+            mediaItemID: context.item.id,
+            field: .title
+        )
+
+        XCTAssertEqual(clearResult.message, "Title override cleared.")
+        metadata = try XCTUnwrap(context.store.fetchMetadataItem(mediaItemID: context.item.id))
+        XCTAssertEqual(metadata.title, "Manual Title")
+        XCTAssertFalse(metadata.titleOverrideLocked)
+    }
+
+    func testMetadataActionServiceSelectsPoster() async throws {
+        let context = try makeMediaContext()
+        let first = try posterAsset(
+            id: "action-service-poster-first",
+            mediaItemID: context.item.id,
+            remotePath: "/action-first.jpg",
+            isSelected: true
+        )
+        let second = try posterAsset(
+            id: "action-service-poster-second",
+            mediaItemID: context.item.id,
+            remotePath: "/action-second.jpg"
+        )
+        try context.store.savePosterAsset(first)
+        try context.store.savePosterAsset(second)
+
+        let result = try await LibraryMetadataActionService(
+            store: context.store,
+            provider: FakeMetadataProvider()
+        ).selectPoster(
+            mediaItemID: context.item.id,
+            posterAssetID: second.id
+        )
+
+        XCTAssertEqual(result.message, "Poster selected.")
+        let posters = try context.store.fetchPosterAssets(mediaItemID: context.item.id)
+        XCTAssertFalse(try XCTUnwrap(posters.first { $0.id == first.id }).isSelected)
+        let selected = try XCTUnwrap(posters.first { $0.id == second.id })
+        XCTAssertTrue(selected.isSelected)
+        XCTAssertEqual(selected.selectionSource, .manual)
+    }
+
+    func testMetadataActionServiceMapsProviderErrorToUISafeMessage() async throws {
+        let context = try makeMediaContext()
+        let provider = FakeMetadataProvider()
+        provider.searchError = MetadataError.missingToken
+
+        do {
+            _ = try await LibraryMetadataActionService(
+                store: context.store,
+                provider: provider
+            ).searchMetadataCandidates(mediaItemID: context.item.id)
+            XCTFail("Expected LibraryMetadataActionError.")
+        } catch let error as LibraryMetadataActionError {
+            XCTAssertEqual(
+                error.message,
+                "TMDB read token is missing. Set CINEMIND_TMDB_READ_TOKEN and restart CineMind."
+            )
+        } catch {
+            XCTFail("Expected LibraryMetadataActionError, got \(error).")
+        }
+    }
+
     func testAutoMatchSkipsManualLockWithoutSearching() async throws {
         let context = try makeMediaContext()
         let provider = FakeMetadataProvider()

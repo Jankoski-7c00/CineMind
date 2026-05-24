@@ -64,7 +64,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "CineMindApp",
-            dependencies: ["AppUI", "Application", "Playback", "PlaybackAVFoundation", "Persistence", "Scanner", "Shared"]
+            dependencies: ["AppUI", "Application", "Metadata", "Playback", "PlaybackAVFoundation", "Persistence", "Scanner", "Shared"]
         ),
         .executableTarget(
             name: "CineMindShell",

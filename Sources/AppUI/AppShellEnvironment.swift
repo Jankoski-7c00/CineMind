@@ -8,6 +8,8 @@ public struct AppShellEnvironment {
     public let folderAdder: any LibraryFolderAdding
     public let libraryScanner: any LibraryScanning
     public let playbackController: (any PlaybackApplicationControlling)?
+    public let metadataActions: (any LibraryMetadataActionHandling)?
+    public let metadataActionsUnavailableMessage: String?
 
     public init(
         mediaSummaryBrowser: any LibraryMediaSummaryBrowsing,
@@ -16,7 +18,9 @@ public struct AppShellEnvironment {
         folderPicker: any LibraryFolderPicking,
         folderAdder: any LibraryFolderAdding,
         libraryScanner: any LibraryScanning,
-        playbackController: (any PlaybackApplicationControlling)? = nil
+        playbackController: (any PlaybackApplicationControlling)? = nil,
+        metadataActions: (any LibraryMetadataActionHandling)? = nil,
+        metadataActionsUnavailableMessage: String? = nil
     ) {
         self.mediaSummaryBrowser = mediaSummaryBrowser
         self.itemDetailBrowser = itemDetailBrowser
@@ -25,5 +29,7 @@ public struct AppShellEnvironment {
         self.folderAdder = folderAdder
         self.libraryScanner = libraryScanner
         self.playbackController = playbackController
+        self.metadataActions = metadataActions
+        self.metadataActionsUnavailableMessage = metadataActionsUnavailableMessage
     }
 }
