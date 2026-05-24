@@ -14,6 +14,10 @@ The seven executable subplans are:
 6. [`Phase 4.6 Playback Controls`](phase-4-6-playback-controls.md)
 7. [`Phase 4.7 Metadata Actions`](phase-4-7-metadata-actions.md)
 
+Completion audit:
+
+- [`Phase 4 Completion Report`](phase-4-completion-report.md)
+
 Phase 4 remains constrained by:
 
 - `CLAUDE.md`
