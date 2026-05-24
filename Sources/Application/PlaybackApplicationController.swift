@@ -13,25 +13,50 @@ public enum PlaybackApplicationState: Sendable, Equatable {
     case failed(String)
 }
 
+public struct PlaybackApplicationTrack: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let displayLabel: String
+    public let isDefault: Bool
+    public let isSelected: Bool
+
+    public init(
+        id: String,
+        displayLabel: String,
+        isDefault: Bool,
+        isSelected: Bool
+    ) {
+        self.id = id
+        self.displayLabel = displayLabel
+        self.isDefault = isDefault
+        self.isSelected = isSelected
+    }
+}
+
 public struct PlaybackApplicationStatus: Sendable, Equatable {
     public let state: PlaybackApplicationState
     public let mediaFileID: MediaFileID?
     public let displayName: String?
     public let positionMS: Int
     public let durationMS: Int?
+    public let audioTracks: [PlaybackApplicationTrack]
+    public let subtitleTracks: [PlaybackApplicationTrack]
 
     public init(
         state: PlaybackApplicationState,
         mediaFileID: MediaFileID?,
         displayName: String?,
         positionMS: Int,
-        durationMS: Int?
+        durationMS: Int?,
+        audioTracks: [PlaybackApplicationTrack] = [],
+        subtitleTracks: [PlaybackApplicationTrack] = []
     ) {
         self.state = state
         self.mediaFileID = mediaFileID
         self.displayName = displayName
         self.positionMS = positionMS
         self.durationMS = durationMS
+        self.audioTracks = audioTracks
+        self.subtitleTracks = subtitleTracks
     }
 
     public static let idle = PlaybackApplicationStatus(
@@ -52,6 +77,10 @@ public protocol PlaybackApplicationControlling: Sendable {
     func stop() async
     func seek(toMS positionMS: Int) async
     func seekRelative(byMS deltaMS: Int) async
+    func selectAudioTrack(trackID: String) async
+    func selectSubtitleTrack(trackID: String) async
+    func disableSubtitles() async
+    func shutdown() async
 }
 
 public actor PlaybackApplicationController: PlaybackApplicationControlling {
@@ -68,6 +97,8 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
     private var currentState: PlaybackApplicationState = .idle
     private var currentPositionMS = 0
     private var currentDurationMS: Int?
+    private var currentAudioTracks: [PlaybackApplicationTrack] = []
+    private var currentSubtitleTracks: [PlaybackApplicationTrack] = []
     private var progressSessionOpen = false
     private var didAutoPlayActiveSession = false
     private var lastEmittedStatus: PlaybackApplicationStatus?
@@ -127,6 +158,8 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         currentState = .loading
         currentPositionMS = max(0, playableFile.resumePositionMS ?? 0)
         currentDurationMS = nil
+        currentAudioTracks = []
+        currentSubtitleTracks = []
         didAutoPlayActiveSession = false
         progressSessionOpen = true
 
@@ -149,7 +182,7 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         await coordinator.stop()
         await closeProgressSessionIfOpen()
         resetActiveSession()
-        emitStatus(.idle)
+        emitStatus(.idle, force: true)
     }
 
     public func pause() async {
@@ -200,6 +233,65 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         await seek(toMS: targetMS)
     }
 
+    public func selectAudioTrack(trackID: String) async {
+        startEventLoopIfNeeded()
+
+        guard validTrackSelectionState,
+              currentAudioTracks.contains(where: { $0.id == trackID }) else {
+            return
+        }
+
+        await coordinator.selectAudioTrack(trackID: trackID)
+        currentAudioTracks = tracksBySelecting(trackID, in: currentAudioTracks)
+        emitCurrentStatus()
+    }
+
+    public func selectSubtitleTrack(trackID: String) async {
+        startEventLoopIfNeeded()
+
+        guard validTrackSelectionState,
+              currentSubtitleTracks.contains(where: { $0.id == trackID }) else {
+            return
+        }
+
+        await coordinator.selectSubtitleTrack(trackID: trackID)
+        currentSubtitleTracks = tracksBySelecting(trackID, in: currentSubtitleTracks)
+        emitCurrentStatus()
+    }
+
+    public func disableSubtitles() async {
+        startEventLoopIfNeeded()
+
+        guard validTrackSelectionState,
+              currentSubtitleTracks.contains(where: \.isSelected) else {
+            return
+        }
+
+        await coordinator.disableSubtitle()
+        currentSubtitleTracks = currentSubtitleTracks.map { track in
+            PlaybackApplicationTrack(
+                id: track.id,
+                displayLabel: track.displayLabel,
+                isDefault: track.isDefault,
+                isSelected: false
+            )
+        }
+        emitCurrentStatus()
+    }
+
+    public func shutdown() async {
+        startEventLoopIfNeeded()
+
+        if activeMediaFileID != nil || progressSessionOpen {
+            await stop()
+        }
+
+        eventTask?.cancel()
+        eventTask = nil
+        await coordinator.shutdown()
+        statusContinuation.finish()
+    }
+
     private var validSeekState: Bool {
         switch currentState {
         case .ready, .playing, .paused, .buffering:
@@ -207,6 +299,10 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         case .idle, .loading, .ended, .failed:
             return false
         }
+    }
+
+    private var validTrackSelectionState: Bool {
+        validSeekState
     }
 
     private var activeSessionShouldIgnoreRepeatedOpen: Bool {
@@ -243,10 +339,6 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
     }
 
     private func handleCoordinatorEvent(_ event: PlaybackEvent) async {
-        if case .tracksDiscovered = event {
-            return
-        }
-
         if shouldSuppressCoordinatorEvent(event) {
             return
         }
@@ -271,8 +363,10 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         case .playbackFailed(let error):
             currentState = .failed(userSafeMessage(forPlaybackError: error))
             emitCurrentStatus()
-        case .tracksDiscovered:
-            break
+        case .tracksDiscovered(let audioTracks, let subtitleTracks):
+            currentAudioTracks = Self.mapTracks(audioTracks, fallbackPrefix: "Audio")
+            currentSubtitleTracks = Self.mapTracks(subtitleTracks, fallbackPrefix: "Subtitle")
+            emitCurrentStatus()
         }
     }
 
@@ -353,6 +447,8 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         currentState = .idle
         currentPositionMS = 0
         currentDurationMS = nil
+        currentAudioTracks = []
+        currentSubtitleTracks = []
         progressSessionOpen = false
         didAutoPlayActiveSession = false
     }
@@ -364,13 +460,15 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
                 mediaFileID: activeMediaFileID,
                 displayName: activeDisplayName,
                 positionMS: currentPositionMS,
-                durationMS: currentDurationMS
+                durationMS: currentDurationMS,
+                audioTracks: currentAudioTracks,
+                subtitleTracks: currentSubtitleTracks
             )
         )
     }
 
-    private func emitStatus(_ status: PlaybackApplicationStatus) {
-        guard status != lastEmittedStatus else {
+    private func emitStatus(_ status: PlaybackApplicationStatus, force: Bool = false) {
+        guard force || status != lastEmittedStatus else {
             return
         }
 
@@ -386,6 +484,60 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
             displayName: file.displayName,
             resumePositionMS: file.resumePositionMS
         )
+    }
+
+    private func tracksBySelecting(
+        _ selectedTrackID: String,
+        in tracks: [PlaybackApplicationTrack]
+    ) -> [PlaybackApplicationTrack] {
+        tracks.map { track in
+            PlaybackApplicationTrack(
+                id: track.id,
+                displayLabel: track.displayLabel,
+                isDefault: track.isDefault,
+                isSelected: track.id == selectedTrackID
+            )
+        }
+    }
+
+    private static func mapTracks(
+        _ tracks: [PlaybackTrack],
+        fallbackPrefix: String
+    ) -> [PlaybackApplicationTrack] {
+        tracks.enumerated().map { index, track in
+            PlaybackApplicationTrack(
+                id: track.id,
+                displayLabel: trackDisplayLabel(
+                    for: track,
+                    fallbackPrefix: fallbackPrefix,
+                    index: index
+                ),
+                isDefault: track.isDefault,
+                isSelected: track.isSelected
+            )
+        }
+    }
+
+    private static func trackDisplayLabel(
+        for track: PlaybackTrack,
+        fallbackPrefix: String,
+        index: Int
+    ) -> String {
+        let title = track.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let language = track.language?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseLabel: String
+        if let title, !title.isEmpty {
+            baseLabel = title
+        } else if let language, !language.isEmpty {
+            baseLabel = language.uppercased()
+        } else {
+            baseLabel = "\(fallbackPrefix) \(index + 1)"
+        }
+
+        if track.isDefault {
+            return "\(baseLabel) (Default)"
+        }
+        return baseLabel
     }
 
     private func userSafeMessage(forOpeningError error: any Error) -> String {

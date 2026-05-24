@@ -199,27 +199,41 @@ public enum PlaybackResumePolicy {
     public static let completionProgressThreshold = 0.95
 
     public static func resumePositionMS(for history: PlaybackHistory?) -> Int? {
-        guard let history,
-              !history.completed,
-              history.positionMS >= minimumResumePositionMS else {
+        guard let history else {
+            return nil
+        }
+        return resumePositionMS(
+            positionMS: history.positionMS,
+            durationMS: history.durationMS,
+            completed: history.completed
+        )
+    }
+
+    public static func resumePositionMS(
+        positionMS: Int,
+        durationMS: Int?,
+        completed: Bool
+    ) -> Int? {
+        guard !completed,
+              positionMS >= minimumResumePositionMS else {
             return nil
         }
 
-        if let durationMS = history.durationMS {
-            let remainingMS = durationMS - history.positionMS
+        if let durationMS {
+            let remainingMS = durationMS - positionMS
             if remainingMS <= nearEndRemainingMS {
                 return nil
             }
 
             if durationMS > 0 {
-                let progress = Double(history.positionMS) / Double(durationMS)
+                let progress = Double(positionMS) / Double(durationMS)
                 if progress >= completionProgressThreshold {
                     return nil
                 }
             }
         }
 
-        return history.positionMS
+        return positionMS
     }
 }
 

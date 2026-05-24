@@ -30,8 +30,8 @@ final class CineMindPlaybackRuntime {
     }
 
     deinit {
-        Task { [coordinator] in
-            await coordinator.shutdown()
+        Task { [controller] in
+            await controller.shutdown()
         }
     }
 }

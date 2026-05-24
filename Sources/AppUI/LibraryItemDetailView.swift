@@ -212,6 +212,36 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         }
     }
 
+    public func selectAudioTrack(trackID: String) {
+        guard let playbackController else {
+            return
+        }
+
+        Task {
+            await playbackController.selectAudioTrack(trackID: trackID)
+        }
+    }
+
+    public func selectSubtitleTrack(trackID: String) {
+        guard let playbackController else {
+            return
+        }
+
+        Task {
+            await playbackController.selectSubtitleTrack(trackID: trackID)
+        }
+    }
+
+    public func disableSubtitles() {
+        guard let playbackController else {
+            return
+        }
+
+        Task {
+            await playbackController.disableSubtitles()
+        }
+    }
+
     public func togglePlayPause() {
         guard let playbackController else {
             return
@@ -357,10 +387,18 @@ public struct LibraryItemDetailView: View {
                         Text(playbackStatusLabel(status))
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        if case .loading = status.state,
+                           status.positionMS > 0 {
+                            Text("Resuming from \(timeLabel(milliseconds: status.positionMS))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                     Spacer()
                     playbackControls(for: status.state)
                 }
+
+                playbackTrackMenus(for: status)
 
                 VStack(spacing: 4) {
                     if let durationMS = status.durationMS, durationMS > 0 {
@@ -415,6 +453,106 @@ public struct LibraryItemDetailView: View {
                 scrubPositionMS = Double(status.positionMS)
                 isScrubbing = false
             }
+        }
+    }
+
+    @ViewBuilder
+    private func playbackTrackMenus(for status: PlaybackApplicationStatus) -> some View {
+        let isEnabled = trackSelectionEnabled(status.state)
+        if !status.audioTracks.isEmpty || !status.subtitleTracks.isEmpty {
+            HStack(spacing: 8) {
+                if !status.audioTracks.isEmpty {
+                    trackMenu(
+                        title: "Audio",
+                        systemImage: "speaker.wave.2.fill",
+                        tracks: status.audioTracks,
+                        isEnabled: isEnabled
+                    ) { trackID in
+                        viewModel.selectAudioTrack(trackID: trackID)
+                    }
+                }
+
+                if !status.subtitleTracks.isEmpty {
+                    subtitleTrackMenu(
+                        tracks: status.subtitleTracks,
+                        isEnabled: isEnabled
+                    )
+                }
+            }
+        }
+    }
+
+    private func trackMenu(
+        title: String,
+        systemImage: String,
+        tracks: [PlaybackApplicationTrack],
+        isEnabled: Bool,
+        select: @escaping (String) -> Void
+    ) -> some View {
+        Menu {
+            ForEach(tracks) { track in
+                Button {
+                    select(track.id)
+                } label: {
+                    trackMenuItemLabel(track.displayLabel, isSelected: track.isSelected)
+                }
+                .disabled(!isEnabled || track.isSelected)
+            }
+        } label: {
+            Label(title, systemImage: systemImage)
+        }
+        .controlSize(.small)
+        .disabled(!isEnabled)
+    }
+
+    private func subtitleTrackMenu(
+        tracks: [PlaybackApplicationTrack],
+        isEnabled: Bool
+    ) -> some View {
+        let subtitlesDisabled = !tracks.contains(where: \.isSelected)
+        return Menu {
+            Button {
+                viewModel.disableSubtitles()
+            } label: {
+                trackMenuItemLabel("Off", isSelected: subtitlesDisabled)
+            }
+            .disabled(!isEnabled || subtitlesDisabled)
+
+            Divider()
+
+            ForEach(tracks) { track in
+                Button {
+                    viewModel.selectSubtitleTrack(trackID: track.id)
+                } label: {
+                    trackMenuItemLabel(track.displayLabel, isSelected: track.isSelected)
+                }
+                .disabled(!isEnabled || track.isSelected)
+            }
+        } label: {
+            Label("Subtitles", systemImage: "captions.bubble")
+        }
+        .controlSize(.small)
+        .disabled(!isEnabled)
+    }
+
+    private func trackMenuItemLabel(
+        _ label: String,
+        isSelected: Bool
+    ) -> some View {
+        HStack {
+            Text(label)
+            if isSelected {
+                Image(systemName: "checkmark")
+            }
+        }
+    }
+
+    private func trackSelectionEnabled(_ state: PlaybackApplicationState) -> Bool {
+        switch state {
+        case .ready, .playing, .paused, .buffering:
+            true
+        case .idle, .loading, .ended, .failed:
+            false
         }
     }
 
@@ -723,8 +861,20 @@ public struct LibraryItemDetailView: View {
                     Text(file.availabilityLabel)
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    if let reason = file.playabilityReason {
+                        Text(reason)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .help(reason)
+                    }
+                    if file.isPlayable,
+                       let resumeLabel = file.resumePositionLabel {
+                        Text("Resume from \(resumeLabel)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     if file.isPlayable {
-                        let buttonState = filePlaybackButtonState(for: file.mediaFileID)
+                        let buttonState = filePlaybackButtonState(for: file)
                         Button {
                             performFilePlaybackAction(
                                 buttonState,
@@ -742,10 +892,10 @@ public struct LibraryItemDetailView: View {
     }
 
     private func filePlaybackButtonState(
-        for mediaFileID: MediaFileID
+        for file: LibraryFileSummary
     ) -> FilePlaybackButtonState {
         let status = viewModel.playbackStatus
-        guard status.mediaFileID == mediaFileID else {
+        guard status.mediaFileID == file.mediaFileID else {
             return .play
         }
 

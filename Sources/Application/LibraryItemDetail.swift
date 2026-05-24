@@ -5,6 +5,8 @@ import Persistence
 public struct LibraryFileSummary: Sendable, Equatable {
     public let mediaFileID: MediaFileID
     public let isPlayable: Bool
+    public let playabilityReason: String?
+    public let resumePositionLabel: String?
     public let fileName: String
     public let fileExtension: String
     public let fileSizeLabel: String
@@ -189,14 +191,37 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
     }
 
     private func mapFile(_ file: PersistedMediaFileSummary) -> LibraryFileSummary {
-        LibraryFileSummary(
+        let playable = file.isAvailable
+            && isAVFoundationPlayable(fileExtension: file.fileExtension)
+        let resumeLabel: String? = {
+            guard let ps = file.playbackSummary else { return nil }
+            guard let positionMS = PlaybackResumePolicy.resumePositionMS(
+                positionMS: ps.positionMS,
+                durationMS: ps.durationMS,
+                completed: ps.completed
+            ) else { return nil }
+            return Self.resumeTimeLabel(positionMS)
+        }()
+        return LibraryFileSummary(
             mediaFileID: file.id,
-            isPlayable: file.isAvailable && isAVFoundationPlayable(fileExtension: file.fileExtension),
+            isPlayable: playable,
+            playabilityReason: playabilityReason(for: file, isPlayable: playable),
+            resumePositionLabel: resumeLabel,
             fileName: file.fileName,
             fileExtension: file.fileExtension,
             fileSizeLabel: fileSizeLabel(file.fileSizeBytes),
             availabilityLabel: fileAvailabilityLabel(for: file)
         )
+    }
+
+    private func playabilityReason(
+        for file: PersistedMediaFileSummary,
+        isPlayable: Bool
+    ) -> String? {
+        if isPlayable { return nil }
+        if file.folderIsAvailable == false { return "Folder unavailable" }
+        if !file.isAvailable { return "File is unavailable" }
+        return "Unsupported format for built-in player"
     }
 
     private func displayTitle(for detail: PersistedMediaItemDetail) -> String {
@@ -443,6 +468,17 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
         }
         let gb = mb / 1024.0
         return String(format: "%.1f GB", gb)
+    }
+
+    public static func resumeTimeLabel(_ positionMS: Int) -> String {
+        let totalSeconds = positionMS / 1000
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 

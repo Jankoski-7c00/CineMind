@@ -364,6 +364,49 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         XCTAssertEqual(fixture.progressStore.operations, [.increment, .save])
     }
 
+    func testStopWhileAlreadyIdleReemitsIdleForStalePlaybackUI() async throws {
+        let file = try makeApplicationPlayableFile("stop-idle-recovery")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.stop()
+        try await assertNextStatus(.idle, statuses: &statuses)
+
+        await fixture.controller.stop()
+        try await assertNextStatus(.idle, statuses: &statuses)
+
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .stop],
+            backend: fixture.backend
+        )
+    }
+
+    func testShutdownStopsAndPersistsProgressBeforeBackendShutdown() async throws {
+        let file = try makeApplicationPlayableFile("shutdown")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        fixture.backend.emit(.positionUpdated(positionMS: 20_000))
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.shutdown()
+
+        try await assertNextStatus(.idle, statuses: &statuses)
+        let nextStatus = await statuses.next()
+        XCTAssertNil(nextStatus)
+        await fixture.backend.waitForCommandCount(4)
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play, .stop, .shutdown],
+            backend: fixture.backend
+        )
+        XCTAssertEqual(fixture.progressStore.incrementCalls.map(\.mediaFileID), [file.mediaFileID])
+        XCTAssertEqual(fixture.progressStore.saveCalls.map(\.positionMS), [20_000])
+        XCTAssertEqual(fixture.progressStore.operations, [.increment, .save])
+    }
+
     func testMultipleOpensStopPreviousSessionBeforeLoadingNext() async throws {
         let first = try makeApplicationPlayableFile("first")
         let second = try makeApplicationPlayableFile("second")
@@ -482,7 +525,7 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
     }
 
-    func testTrackDiscoveryDoesNotEmitApplicationStatus() async throws {
+    func testTrackDiscoveryEmitsApplicationStatusWithTracks() async throws {
         let file = try makeApplicationPlayableFile("tracks")
         let fixture = makeFixture(files: [file])
         var statuses = fixture.controller.statusStream.makeAsyncIterator()
@@ -505,23 +548,243 @@ final class PlaybackApplicationControllerTests: XCTestCase {
                         title: "English",
                         isDefault: true,
                         isSelected: true
+                    ),
+                    PlaybackTrack(
+                        id: "audio-2",
+                        type: .audio,
+                        language: nil,
+                        title: "Commentary",
+                        isDefault: false,
+                        isSelected: false
                     )
                 ],
-                subtitleTracks: []
+                subtitleTracks: [
+                    PlaybackTrack(
+                        id: "subtitle-1",
+                        type: .subtitle,
+                        language: "es",
+                        title: nil,
+                        isDefault: false,
+                        isSelected: true
+                    )
+                ]
             )
         )
-        fixture.backend.emit(.positionUpdated(positionMS: 1_000))
 
         try await assertNextStatus(
             PlaybackApplicationStatus(
                 state: .playing,
                 mediaFileID: file.mediaFileID,
                 displayName: file.displayName,
-                positionMS: 1_000,
-                durationMS: nil
+                positionMS: 0,
+                durationMS: nil,
+                audioTracks: [
+                    PlaybackApplicationTrack(
+                        id: "audio-1",
+                        displayLabel: "English (Default)",
+                        isDefault: true,
+                        isSelected: true
+                    ),
+                    PlaybackApplicationTrack(
+                        id: "audio-2",
+                        displayLabel: "Commentary",
+                        isDefault: false,
+                        isSelected: false
+                    )
+                ],
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: "subtitle-1",
+                        displayLabel: "ES",
+                        isDefault: false,
+                        isSelected: true
+                    )
+                ]
             ),
             statuses: &statuses
         )
+    }
+
+    func testAudioTrackSelectionForwardsCommandAndUpdatesStatus() async throws {
+        let file = try makeApplicationPlayableFile("audio-selection")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        fixture.backend.emit(
+            .tracksDiscovered(
+                audioTracks: [
+                    PlaybackTrack(
+                        id: "audio-1",
+                        type: .audio,
+                        language: nil,
+                        title: "Main",
+                        isDefault: true,
+                        isSelected: true
+                    ),
+                    PlaybackTrack(
+                        id: "audio-2",
+                        type: .audio,
+                        language: nil,
+                        title: "Commentary",
+                        isDefault: false,
+                        isSelected: false
+                    )
+                ],
+                subtitleTracks: []
+            )
+        )
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.selectAudioTrack(trackID: "audio-2")
+        await fixture.backend.waitForCommandCount(3)
+
+        await assertCommands(
+            [
+                .load(playbackPlayableFile(from: file)),
+                .play,
+                .selectAudioTrack("audio-2")
+            ],
+            backend: fixture.backend
+        )
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                audioTracks: [
+                    PlaybackApplicationTrack(
+                        id: "audio-1",
+                        displayLabel: "Main (Default)",
+                        isDefault: true,
+                        isSelected: false
+                    ),
+                    PlaybackApplicationTrack(
+                        id: "audio-2",
+                        displayLabel: "Commentary",
+                        isDefault: false,
+                        isSelected: true
+                    )
+                ]
+            ),
+            statuses: &statuses
+        )
+    }
+
+    func testSubtitleTrackSelectionAndDisableForwardCommandsAndUpdateStatus() async throws {
+        let file = try makeApplicationPlayableFile("subtitle-selection")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+        fixture.backend.emit(
+            .tracksDiscovered(
+                audioTracks: [],
+                subtitleTracks: [
+                    PlaybackTrack(
+                        id: "subtitle-1",
+                        type: .subtitle,
+                        language: "en",
+                        title: nil,
+                        isDefault: true,
+                        isSelected: true
+                    ),
+                    PlaybackTrack(
+                        id: "subtitle-2",
+                        type: .subtitle,
+                        language: nil,
+                        title: "Director Notes",
+                        isDefault: false,
+                        isSelected: false
+                    )
+                ]
+            )
+        )
+        try await discardNextStatus(statuses: &statuses)
+
+        await fixture.controller.selectSubtitleTrack(trackID: "subtitle-2")
+        await fixture.backend.waitForCommandCount(3)
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: "subtitle-1",
+                        displayLabel: "EN (Default)",
+                        isDefault: true,
+                        isSelected: false
+                    ),
+                    PlaybackApplicationTrack(
+                        id: "subtitle-2",
+                        displayLabel: "Director Notes",
+                        isDefault: false,
+                        isSelected: true
+                    )
+                ]
+            ),
+            statuses: &statuses
+        )
+
+        await fixture.controller.disableSubtitles()
+        await fixture.backend.waitForCommandCount(4)
+
+        await assertCommands(
+            [
+                .load(playbackPlayableFile(from: file)),
+                .play,
+                .selectSubtitleTrack("subtitle-2"),
+                .disableSubtitle
+            ],
+            backend: fixture.backend
+        )
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: "subtitle-1",
+                        displayLabel: "EN (Default)",
+                        isDefault: true,
+                        isSelected: false
+                    ),
+                    PlaybackApplicationTrack(
+                        id: "subtitle-2",
+                        displayLabel: "Director Notes",
+                        isDefault: false,
+                        isSelected: false
+                    )
+                ]
+            ),
+            statuses: &statuses
+        )
+    }
+
+    func testTrackSelectionForMissingTrackIsNoOp() async throws {
+        let file = try makeApplicationPlayableFile("missing-track")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.selectAudioTrack(trackID: "missing-audio")
+        await fixture.controller.selectSubtitleTrack(trackID: "missing-subtitle")
+        await fixture.controller.disableSubtitles()
+
+        await assertCommands(
+            [.load(playbackPlayableFile(from: file)), .play],
+            backend: fixture.backend
+        )
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
     }
 
     // MARK: - Seek

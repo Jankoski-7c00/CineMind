@@ -1020,6 +1020,33 @@ final class PersistenceRepositoryTests: XCTestCase {
         )
     }
 
+    func testMediaItemDetailFilesIncludePlaybackSummary() throws {
+        let context = try makePlaybackContext()
+        let playedAt = Date(timeIntervalSince1970: 1_000)
+
+        try context.store.savePlaybackProgress(
+            mediaItemID: context.item.id,
+            mediaFileID: context.file.id,
+            positionMS: 45_000,
+            durationMS: 120_000,
+            completed: false,
+            playedAt: playedAt
+        )
+
+        let detail = try XCTUnwrap(context.store.fetchMediaItemDetail(id: context.item.id))
+        let file = try XCTUnwrap(detail.files.first { $0.id == context.file.id })
+
+        XCTAssertEqual(
+            file.playbackSummary,
+            PersistedFilePlaybackSummary(
+                positionMS: 45_000,
+                durationMS: 120_000,
+                completed: false,
+                lastPlayedAt: playedAt
+            )
+        )
+    }
+
     func testPlaybackHistoryUpsertUpdatesSameMediaItemAndMediaFileRow() throws {
         let context = try makePlaybackContext()
         let firstPlayedAt = Date(timeIntervalSince1970: 1_000)

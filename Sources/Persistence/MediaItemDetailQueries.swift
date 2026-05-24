@@ -1,6 +1,13 @@
 import Domain
 import Foundation
 
+public struct PersistedFilePlaybackSummary: Sendable, Equatable {
+    public let positionMS: Int
+    public let durationMS: Int?
+    public let completed: Bool
+    public let lastPlayedAt: Date
+}
+
 public struct PersistedMediaFileSummary: Sendable, Equatable {
     public let id: MediaFileID
     public let fileName: String
@@ -10,6 +17,7 @@ public struct PersistedMediaFileSummary: Sendable, Equatable {
     public let isAvailable: Bool
     public let folderDisplayName: String?
     public let folderIsAvailable: Bool?
+    public let playbackSummary: PersistedFilePlaybackSummary?
 }
 
 public struct PersistedMediaItemDetail: Sendable, Equatable {
@@ -73,6 +81,19 @@ extension CineMindStore {
         let fileAvailable = try requiredDetailBool(statement, 5)
         let folderAvailable = statement.int(at: 7).map { $0 == 1 } ?? false
 
+        let playbackSummary: PersistedFilePlaybackSummary?
+        if let positionMS = statement.int(at: 8) {
+            playbackSummary = PersistedFilePlaybackSummary(
+                positionMS: positionMS,
+                durationMS: statement.int(at: 9),
+                completed: statement.int(at: 10).map { $0 == 1 } ?? false,
+                lastPlayedAt: decodePersistenceDate(statement.double(at: 11))
+                    ?? Date(timeIntervalSince1970: 0)
+            )
+        } else {
+            playbackSummary = nil
+        }
+
         return PersistedMediaFileSummary(
             id: try requiredDetailString(statement, 0),
             fileName: try requiredDetailString(statement, 1),
@@ -81,7 +102,8 @@ extension CineMindStore {
             relativePath: try requiredDetailString(statement, 4),
             isAvailable: fileAvailable && folderAvailable,
             folderDisplayName: statement.string(at: 6),
-            folderIsAvailable: statement.int(at: 7).map { $0 == 1 }
+            folderIsAvailable: statement.int(at: 7).map { $0 == 1 },
+            playbackSummary: playbackSummary
         )
     }
 }
@@ -137,10 +159,17 @@ private let mediaItemDetailFilesSQL = """
            media_files.relative_path,
            media_files.is_available,
            library_folders.display_name,
-           library_folders.is_available
+           library_folders.is_available,
+           playback_history.position_ms,
+           playback_history.duration_ms,
+           playback_history.completed,
+           playback_history.last_played_at
     FROM media_files
     INNER JOIN library_folders
       ON library_folders.id = media_files.library_folder_id
+    LEFT JOIN playback_history
+      ON playback_history.media_item_id = media_files.media_item_id
+     AND playback_history.media_file_id = media_files.id
     WHERE media_files.media_item_id = ?
     ORDER BY media_files.relative_path ASC
     """

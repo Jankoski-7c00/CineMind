@@ -167,6 +167,22 @@ final class ApplicationModuleTests: XCTestCase {
         XCTAssertEqual(playableFile.resumePositionMS, 60_000)
     }
 
+    func testValidInProgressHistoryResumesAfterStoreReopen() throws {
+        let context = try makePlaybackContext(relativePath: "Arrival (2016).mkv")
+        try context.store.savePlaybackHistory(
+            playbackHistory(
+                context: context,
+                positionMS: 60_000,
+                durationMS: 600_000
+            )
+        )
+
+        let reopenedStore = try CineMindStore(path: databaseURL.path)
+        let playableFile = try OpenMediaUseCase(store: reopenedStore).open(mediaFileID: context.file.id)
+
+        XCTAssertEqual(playableFile.resumePositionMS, 60_000)
+    }
+
     func testUnknownDurationHistoryResumesWhenPastMinimum() throws {
         let context = try makePlaybackContext(relativePath: "Arrival (2016).mkv")
         try context.store.savePlaybackHistory(
@@ -180,6 +196,48 @@ final class ApplicationModuleTests: XCTestCase {
         let playableFile = try OpenMediaUseCase(store: context.store).open(mediaFileID: context.file.id)
 
         XCTAssertEqual(playableFile.resumePositionMS, 600_000)
+    }
+
+    func testResumePolicyRawCompletedReturnsNil() {
+        XCTAssertNil(PlaybackResumePolicy.resumePositionMS(
+            positionMS: 120_000, durationMS: 600_000, completed: true
+        ))
+    }
+
+    func testResumePolicyRawBelowMinimumReturnsNil() {
+        XCTAssertNil(PlaybackResumePolicy.resumePositionMS(
+            positionMS: 9_999, durationMS: 600_000, completed: false
+        ))
+    }
+
+    func testResumePolicyRawNearEndReturnsNil() {
+        XCTAssertNil(PlaybackResumePolicy.resumePositionMS(
+            positionMS: 240_000, durationMS: 300_000, completed: false
+        ))
+    }
+
+    func testResumePolicyRawOver95PercentReturnsNil() {
+        XCTAssertNil(PlaybackResumePolicy.resumePositionMS(
+            positionMS: 570_000, durationMS: 600_000, completed: false
+        ))
+    }
+
+    func testResumePolicyRawValidReturnsPosition() {
+        XCTAssertEqual(
+            PlaybackResumePolicy.resumePositionMS(
+                positionMS: 60_000, durationMS: 600_000, completed: false
+            ),
+            60_000
+        )
+    }
+
+    func testResumePolicyRawUnknownDurationReturnsPositionWhenPastMinimum() {
+        XCTAssertEqual(
+            PlaybackResumePolicy.resumePositionMS(
+                positionMS: 600_000, durationMS: nil, completed: false
+            ),
+            600_000
+        )
     }
 
     func testCompletionPolicyNearEndThreshold() {

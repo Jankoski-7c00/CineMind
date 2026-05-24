@@ -291,6 +291,32 @@ final class LibraryItemDetailTests: XCTestCase {
                 fileExtension: "mkv",
                 fileSizeBytes: 2048,
                 isAvailable: true
+            ),
+            persistedMediaFileSummary(
+                id: "file-resumable",
+                fileName: "Resumable.mp4",
+                fileExtension: "mp4",
+                fileSizeBytes: 4096,
+                isAvailable: true,
+                playbackSummary: PersistedFilePlaybackSummary(
+                    positionMS: 60_000,
+                    durationMS: 600_000,
+                    completed: false,
+                    lastPlayedAt: Date(timeIntervalSince1970: 1_000)
+                )
+            ),
+            persistedMediaFileSummary(
+                id: "file-near-end",
+                fileName: "NearEnd.mp4",
+                fileExtension: "mp4",
+                fileSizeBytes: 8192,
+                isAvailable: true,
+                playbackSummary: PersistedFilePlaybackSummary(
+                    positionMS: 240_000,
+                    durationMS: 300_000,
+                    completed: false,
+                    lastPlayedAt: Date(timeIntervalSince1970: 1_000)
+                )
             )
         ]
         let store = RecordingLibraryItemDetailStore(
@@ -301,15 +327,29 @@ final class LibraryItemDetailTests: XCTestCase {
         let result = try await useCase.fetchDetail(id: itemID)
         let detail = try XCTUnwrap(result)
 
-        XCTAssertEqual(detail.files.map(\.mediaFileID), ["file-playable", "file-unavailable", "file-unsupported"])
-        XCTAssertEqual(detail.files.map(\.isPlayable), [true, false, false])
-        XCTAssertEqual(detail.files.map(\.fileName), ["Playable.mp4", "Unavailable.mp4", "Unsupported.mkv"])
-        XCTAssertEqual(detail.files.map(\.fileExtension), ["mp4", "mp4", "mkv"])
-        XCTAssertEqual(detail.files.map(\.fileSizeLabel), ["1.5 KB", "1.0 MB", "2.0 KB"])
-        XCTAssertEqual(detail.files.map(\.availabilityLabel), ["available", "unavailable", "available"])
+        XCTAssertEqual(detail.files.map(\.mediaFileID), ["file-playable", "file-unavailable", "file-unsupported", "file-resumable", "file-near-end"])
+        XCTAssertEqual(detail.files.map(\.isPlayable), [true, false, false, true, true])
+        XCTAssertEqual(detail.files.map(\.fileName), ["Playable.mp4", "Unavailable.mp4", "Unsupported.mkv", "Resumable.mp4", "NearEnd.mp4"])
+        XCTAssertEqual(detail.files.map(\.fileExtension), ["mp4", "mp4", "mkv", "mp4", "mp4"])
+        XCTAssertEqual(detail.files.map(\.fileSizeLabel), ["1.5 KB", "1.0 MB", "2.0 KB", "4.0 KB", "8.0 KB"])
+        XCTAssertEqual(detail.files.map(\.availabilityLabel), ["available", "unavailable", "available", "available", "available"])
+        XCTAssertEqual(detail.files.map(\.playabilityReason), [
+            nil,
+            "File is unavailable",
+            "Unsupported format for built-in player",
+            nil,
+            nil
+        ])
+        XCTAssertEqual(detail.files.map(\.resumePositionLabel), [
+            nil,
+            nil,
+            nil,
+            "1:00",
+            nil
+        ])
         XCTAssertEqual(
             detail.files.filter(\.isPlayable).map(\.mediaFileID),
-            ["file-playable"]
+            ["file-playable", "file-resumable", "file-near-end"]
         )
     }
 
@@ -332,6 +372,7 @@ final class LibraryItemDetailTests: XCTestCase {
             let detail = try XCTUnwrap(result)
             XCTAssertEqual(detail.files.count, 1)
             XCTAssertEqual(detail.files.first?.isPlayable, true, "\(ext) should be playable")
+            XCTAssertNil(detail.files.first?.playabilityReason, "\(ext) reason should be nil")
         }
 
         let unsupportedExtensions = ["mkv", "avi", "wmv", "flv", "webm"]
@@ -352,6 +393,11 @@ final class LibraryItemDetailTests: XCTestCase {
             let detail = try XCTUnwrap(result)
             XCTAssertEqual(detail.files.count, 1)
             XCTAssertEqual(detail.files.first?.isPlayable, false, "\(ext) should NOT be playable")
+            XCTAssertEqual(
+                detail.files.first?.playabilityReason,
+                "Unsupported format for built-in player",
+                "\(ext) reason should be unsupported format"
+            )
         }
     }
 
@@ -461,6 +507,26 @@ final class LibraryItemDetailFileSizeLabelTests: XCTestCase {
         XCTAssertEqual(LibraryItemDetailUseCase.defaultFileSizeLabel(oneMB), "1.0 MB")
         XCTAssertEqual(LibraryItemDetailUseCase.defaultFileSizeLabel(oneGB - oneMB), "1023.0 MB")
         XCTAssertEqual(LibraryItemDetailUseCase.defaultFileSizeLabel(oneGB), "1.0 GB")
+    }
+}
+
+final class LibraryItemDetailResumeTimeLabelTests: XCTestCase {
+    func testSecondsOnly() {
+        XCTAssertEqual(LibraryItemDetailUseCase.resumeTimeLabel(0), "0:00")
+        XCTAssertEqual(LibraryItemDetailUseCase.resumeTimeLabel(1_000), "0:01")
+        XCTAssertEqual(LibraryItemDetailUseCase.resumeTimeLabel(59_000), "0:59")
+    }
+
+    func testMinutesAndSeconds() {
+        XCTAssertEqual(LibraryItemDetailUseCase.resumeTimeLabel(60_000), "1:00")
+        XCTAssertEqual(LibraryItemDetailUseCase.resumeTimeLabel(754_000), "12:34")
+        XCTAssertEqual(LibraryItemDetailUseCase.resumeTimeLabel(3_599_000), "59:59")
+    }
+
+    func testHoursMinutesSeconds() {
+        XCTAssertEqual(LibraryItemDetailUseCase.resumeTimeLabel(3_600_000), "1:00:00")
+        XCTAssertEqual(LibraryItemDetailUseCase.resumeTimeLabel(4_446_000), "1:14:06")
+        XCTAssertEqual(LibraryItemDetailUseCase.resumeTimeLabel(36_000_000), "10:00:00")
     }
 }
 
@@ -580,7 +646,8 @@ private func persistedMediaFileSummary(
     fileName: String,
     fileExtension: String,
     fileSizeBytes: Int64,
-    isAvailable: Bool
+    isAvailable: Bool,
+    playbackSummary: PersistedFilePlaybackSummary? = nil
 ) -> PersistedMediaFileSummary {
     PersistedMediaFileSummary(
         id: id,
@@ -590,7 +657,8 @@ private func persistedMediaFileSummary(
         relativePath: fileName,
         isAvailable: isAvailable,
         folderDisplayName: "Movies",
-        folderIsAvailable: true
+        folderIsAvailable: true,
+        playbackSummary: playbackSummary
     )
 }
 
