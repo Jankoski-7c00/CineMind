@@ -23,5 +23,7 @@ public struct SidebarView: View {
             Label("Folders", systemImage: "folder")
                 .tag(LibraryBrowserSection.folders)
         }
+        .listStyle(.sidebar)
+        .tint(.accentColor)
     }
 }

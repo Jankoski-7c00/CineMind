@@ -472,78 +472,73 @@ public struct LibraryItemDetailView: View {
     }
 
     private func detailContent(_ detail: LibraryItemDetailShell) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 16) {
-                    posterPanel(
-                        selectedPoster: detail.selectedPoster,
-                        imageState: viewModel.posterImageState
+        ZStack {
+            detailBackdrop
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    MediaDetailHeaderView(
+                        detail: detail,
+                        posterImageState: viewModel.posterImageState
                     )
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        titleBlock(detail)
-                        overviewBlock(detail)
-                        statusBlock(detail)
+                    primaryActionRow(files: detail.files)
+
+                    playbackBlock(for: detail)
+
+                    metadataBlock(detail.metadataDetail)
+
+                    if !detail.files.isEmpty {
+                        filesBlock(detail.files)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    metadataActionsBlock(detail)
                 }
-
-                playbackBlock(for: detail)
-
-                Divider()
-                metadataActionsBlock(detail)
-
-                Divider()
-                metadataBlock(detail.metadataDetail)
-
-                Divider()
-                sourceBlock(detail.metadataDetail.source)
-
-                Divider()
-                posterAssetsBlock(detail.posterAssets)
-
-                if !detail.files.isEmpty {
-                    Divider()
-                    filesBlock(detail.files)
-                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .id(detail.id)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .animation(.easeOut(duration: 0.18), value: detail.id)
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
+    private var detailBackdrop: some View {
+        LinearGradient(
+            colors: [
+                Color.black,
+                Color(red: 0.08, green: 0.09, blue: 0.11),
+                Color.black
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private func metadataActionsBlock(_ detail: LibraryItemDetailShell) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text("Metadata Actions")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    viewModel.refreshMetadata()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+        LiquidGlassCard {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 14) {
+                    if viewModel.metadataActionsAvailable {
+                        metadataActionButtons
+                        metadataActionStatusView
+                        overrideEditor(detail.metadataDetail)
+                    } else {
+                        metadataUnavailableCallout
+                    }
+
+                    Divider()
+                    sourceBlock(detail.metadataDetail.source)
+
+                    Divider()
+                    posterAssetsBlock(detail.posterAssets)
                 }
-                .controlSize(.small)
-                .disabled(!viewModel.metadataActionsAvailable)
-
-                Button {
-                    isRematchSheetPresented = true
-                    viewModel.searchMetadataCandidates()
-                } label: {
-                    Label("Search Matches", systemImage: "magnifyingglass")
-                }
-                .controlSize(.small)
-                .disabled(!viewModel.metadataActionsAvailable)
+                .padding(.top, 10)
+            } label: {
+                Label("Advanced Metadata", systemImage: "slider.horizontal.3")
+                    .cinemindSectionTitleStyle()
             }
-
-            if let unavailableMessage = viewModel.metadataActionsUnavailableMessage {
-                Label(unavailableMessage, systemImage: "exclamationmark.circle")
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-            }
-
-            metadataActionStatusView
-            overrideEditor(detail.metadataDetail)
         }
         .onAppear {
             syncOverrideDrafts(from: detail.metadataDetail)
@@ -551,6 +546,41 @@ public struct LibraryItemDetailView: View {
         .onChange(of: detail.metadataDetail) { _, metadata in
             syncOverrideDrafts(from: metadata)
         }
+    }
+
+    private var metadataActionButtons: some View {
+        HStack(spacing: 8) {
+            Button {
+                viewModel.refreshMetadata()
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.liquidGlass)
+
+            Button {
+                isRematchSheetPresented = true
+                viewModel.searchMetadataCandidates()
+            } label: {
+                Label("Search Matches", systemImage: "magnifyingglass")
+            }
+            .buttonStyle(.liquidGlass)
+
+            Spacer()
+        }
+        .controlSize(.small)
+    }
+
+    private var metadataUnavailableCallout: some View {
+        Label(
+            viewModel.metadataActionsUnavailableMessage
+                ?? "Set CINEMIND_TMDB_READ_TOKEN to enable online metadata matching.",
+            systemImage: "exclamationmark.circle"
+        )
+        .font(.callout)
+        .cinemindSecondaryTextStyle(opacity: 0.76)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .liquidGlassSurface(cornerRadius: 12, material: .ultraThinMaterial)
     }
 
     @ViewBuilder
@@ -699,88 +729,142 @@ public struct LibraryItemDetailView: View {
         languageOverrideText = metadata.languageLabel ?? ""
     }
 
+    private func primaryActionRow(files: [LibraryFileSummary]) -> some View {
+        LiquidGlassPanel(
+            cornerRadius: 18,
+            material: .thinMaterial,
+            padding: EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)
+        ) {
+            HStack(spacing: 12) {
+                if let file = primaryPlaybackFile(in: files) {
+                    let buttonState = filePlaybackButtonState(for: file)
+                    Button {
+                        performFilePlaybackAction(
+                            buttonState,
+                            mediaFileID: file.mediaFileID
+                        )
+                    } label: {
+                        Label(buttonState.title, systemImage: buttonState.systemImage)
+                    }
+                    .buttonStyle(.liquidGlassPrimary)
+                    .disabled(buttonState.isDisabled)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(file.fileName)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                        if let resumeLabel = file.resumePositionLabel {
+                            Text("Resume from \(resumeLabel)")
+                                .font(.caption)
+                                .cinemindSecondaryTextStyle()
+                        } else {
+                            Text(file.fileSizeLabel)
+                                .font(.caption)
+                                .cinemindSecondaryTextStyle()
+                        }
+                    }
+                } else {
+                    Label("No playable local file", systemImage: "play.slash")
+                        .font(.callout.weight(.medium))
+                        .cinemindSecondaryTextStyle(opacity: 0.72)
+                }
+
+                Spacer()
+            }
+        }
+    }
+
+    private func primaryPlaybackFile(in files: [LibraryFileSummary]) -> LibraryFileSummary? {
+        if let activeMediaFileID = viewModel.playbackStatus.mediaFileID,
+           let activeFile = files.first(where: { $0.mediaFileID == activeMediaFileID && $0.isPlayable }) {
+            return activeFile
+        }
+
+        return files.first(where: \.isPlayable)
+    }
+
     @ViewBuilder
     private func playbackBlock(for detail: LibraryItemDetailShell) -> some View {
         if let status = playbackStatus(for: detail) {
-            VStack(alignment: .leading, spacing: 10) {
-                if let playbackSurface {
-                    ZStack(alignment: .bottom) {
-                        playbackSurface
-                            .id("playback-surface")
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 320)
-                            .background(Color.black)
+            LiquidGlassCard("Playback", systemImage: "play.rectangle") {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let playbackSurface {
+                        ZStack(alignment: .bottom) {
+                            playbackSurface
+                                .id("playback-surface")
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 320)
+                                .background(Color.black)
 
-                        if let subtitleText = status.activeSubtitleText {
-                            subtitleOverlay(text: subtitleText)
+                            if let subtitleText = status.activeSubtitleText {
+                                subtitleOverlay(text: subtitleText)
+                            }
                         }
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
 
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Playback")
-                            .font(.headline)
-                        Text(playbackStatusLabel(status))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        if case .loading = status.state,
-                           status.positionMS > 0 {
-                            Text("Resuming from \(timeLabel(milliseconds: status.positionMS))")
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(playbackStatusLabel(status))
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                        }
-                    }
-                    Spacer()
-                    playbackControls(for: status.state)
-                }
-
-                playbackTrackMenus(for: status)
-
-                VStack(spacing: 4) {
-                    if let durationMS = status.durationMS, durationMS > 0 {
-                        Slider(
-                            value: Binding(
-                                get: {
-                                    isScrubbing
-                                        ? scrubPositionMS
-                                        : Double(status.positionMS)
-                                },
-                                set: { newValue in
-                                    scrubPositionMS = newValue
-                                    if !isScrubbing {
-                                        isScrubbing = true
-                                    }
-                                }
-                            ),
-                            in: 0...Double(durationMS),
-                            onEditingChanged: { editing in
-                                if editing {
-                                    if !isScrubbing {
-                                        scrubPositionMS = Double(status.positionMS)
-                                    }
-                                    isScrubbing = true
-                                } else {
-                                    isScrubbing = false
-                                    viewModel.seek(toMS: Int(scrubPositionMS.rounded()))
-                                }
+                            if case .loading = status.state,
+                               status.positionMS > 0 {
+                                Text("Resuming from \(timeLabel(milliseconds: status.positionMS))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
-                        )
-                    } else {
-                        ProgressView(value: playbackProgressRatio(status), total: 1.0)
-                    }
-                    HStack {
-                        Text(timeLabel(
-                            milliseconds: isScrubbing
-                                ? Int(scrubPositionMS)
-                                : status.positionMS
-                        ))
+                        }
                         Spacer()
-                        Text(playbackDurationLabel(status.durationMS))
+                        playbackControls(for: status.state)
                     }
-                    .font(.caption.monospacedDigit())
-                    .foregroundColor(.secondary)
+
+                    playbackTrackMenus(for: status)
+
+                    VStack(spacing: 4) {
+                        if let durationMS = status.durationMS, durationMS > 0 {
+                            Slider(
+                                value: Binding(
+                                    get: {
+                                        isScrubbing
+                                            ? scrubPositionMS
+                                            : Double(status.positionMS)
+                                    },
+                                    set: { newValue in
+                                        scrubPositionMS = newValue
+                                        if !isScrubbing {
+                                            isScrubbing = true
+                                        }
+                                    }
+                                ),
+                                in: 0...Double(durationMS),
+                                onEditingChanged: { editing in
+                                    if editing {
+                                        if !isScrubbing {
+                                            scrubPositionMS = Double(status.positionMS)
+                                        }
+                                        isScrubbing = true
+                                    } else {
+                                        isScrubbing = false
+                                        viewModel.seek(toMS: Int(scrubPositionMS.rounded()))
+                                    }
+                                }
+                            )
+                        } else {
+                            ProgressView(value: playbackProgressRatio(status), total: 1.0)
+                        }
+                        HStack {
+                            Text(timeLabel(
+                                milliseconds: isScrubbing
+                                    ? Int(scrubPositionMS)
+                                    : status.positionMS
+                            ))
+                            Spacer()
+                            Text(playbackDurationLabel(status.durationMS))
+                        }
+                        .font(.caption.monospacedDigit())
+                        .foregroundColor(.secondary)
+                    }
                 }
             }
             .onChange(of: status.positionMS) { _, newPositionMS in
@@ -985,147 +1069,17 @@ public struct LibraryItemDetailView: View {
         .controlSize(.small)
     }
 
-    private func posterPanel(
-        selectedPoster: LibrarySelectedPosterDetail,
-        imageState: PosterImageState
-    ) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.secondary.opacity(0.08))
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
-
-            switch imageState {
-            case .loaded(let loadedImage):
-                Image(decorative: loadedImage.image, scale: 1.0)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 140, height: 210)
-                    .clipped()
-                    .overlay(alignment: .bottom) {
-                        Text(selectedPoster.statusLabel)
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .frame(maxWidth: .infinity)
-                            .background(Color.black.opacity(0.55))
-                    }
-            case .idle:
-                posterPlaceholderContent(selectedPoster: selectedPoster)
-            case .loading:
-                posterPlaceholderContent(
-                    selectedPoster: selectedPoster
-                ) {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-            case .placeholder(let reason):
-                posterPlaceholderContent(
-                    selectedPoster: selectedPoster,
-                    reasonLabel: posterPlaceholderReasonLabel(reason)
-                )
-            }
-        }
-        .frame(width: 140, height: 210)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .accessibilityElement(children: .combine)
-    }
-
-    private func posterPlaceholderContent<Accessory: View>(
-        selectedPoster: LibrarySelectedPosterDetail,
-        reasonLabel: String? = nil,
-        @ViewBuilder accessory: () -> Accessory
-    ) -> some View {
-        VStack(spacing: 8) {
-            Text(selectedPoster.statusLabel)
-                .font(.headline)
-                .multilineTextAlignment(.center)
-            Text(selectedPoster.placeholderSeed)
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-            if let reasonLabel {
-                Text(reasonLabel)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            accessory()
-        }
-        .padding(10)
-    }
-
-    private func posterPlaceholderContent(
-        selectedPoster: LibrarySelectedPosterDetail,
-        reasonLabel: String? = nil
-    ) -> some View {
-        posterPlaceholderContent(
-            selectedPoster: selectedPoster,
-            reasonLabel: reasonLabel
-        ) {
-            EmptyView()
-        }
-    }
-
-    private func posterPlaceholderReasonLabel(_ reason: PosterImagePlaceholderReason) -> String {
-        switch reason {
-        case .noCachePath:
-            "no cache path"
-        case .fileMissing:
-            "file missing"
-        case .decodeFailed:
-            "decode failed"
-        }
-    }
-
-    private func titleBlock(_ detail: LibraryItemDetailShell) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(detail.displayTitle)
-                .font(.title)
-
-            HStack {
-                Text(detail.mediaTypeLabel)
-                if let yearOrEpisodeLabel = detail.yearOrEpisodeLabel {
-                    Text("·")
-                    Text(yearOrEpisodeLabel)
-                }
-            }
-            .foregroundColor(.secondary)
-        }
-    }
-
-    @ViewBuilder
-    private func overviewBlock(_ detail: LibraryItemDetailShell) -> some View {
-        if let summary = detail.summary {
-            Text(summary)
-                .font(.body)
-        }
-    }
-
-    private func statusBlock(_ detail: LibraryItemDetailShell) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            LabeledContent("Availability", value: detail.availabilityLabel)
-            LabeledContent("Metadata", value: detail.metadataLabel)
-            if let lastPlayedLabel = detail.lastPlayedLabel {
-                LabeledContent("Last Played", value: lastPlayedLabel)
-            }
-        }
-    }
-
     private func metadataBlock(_ metadata: LibraryMetadataDetail) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Metadata")
-                .font(.headline)
-
-            LabeledContent("Status", value: metadata.statusLabel)
-            LabeledContent("Local Title", value: metadata.localTitle)
-            LabeledContent("Metadata Title", value: displayValue(metadata.metadataTitle))
-            LabeledContent("Original Title", value: displayValue(metadata.originalTitle))
-            LabeledContent("Summary", value: displayValue(metadata.summary))
-            LabeledContent("Language", value: displayValue(metadata.languageLabel))
-            LabeledContent("Date", value: displayValue(metadata.releaseOrAirDateLabel))
+        LiquidGlassCard("Metadata", systemImage: "tag") {
+            VStack(alignment: .leading, spacing: 8) {
+                LabeledContent("Status", value: metadataStatusLabel(metadata.statusLabel))
+                LabeledContent("Local Title", value: CineMindDisplayText.value(metadata.localTitle))
+                LabeledContent("Matched Title", value: CineMindDisplayText.value(metadata.metadataTitle))
+                LabeledContent("Original Title", value: CineMindDisplayText.value(metadata.originalTitle))
+                LabeledContent("Summary", value: CineMindDisplayText.summary(metadata.summary))
+                LabeledContent("Language", value: CineMindDisplayText.value(metadata.languageLabel))
+                LabeledContent("Release Date", value: CineMindDisplayText.value(metadata.releaseOrAirDateLabel))
+            }
         }
     }
 
@@ -1145,8 +1099,8 @@ public struct LibraryItemDetailView: View {
                 LabeledContent("Matched", value: source.matchedAtLabel)
                 LabeledContent("Refreshed", value: displayValue(source.refreshedAtLabel))
             } else {
-                Text("Not provided")
-                    .foregroundColor(.secondary)
+                Text(CineMindDisplayText.emptyValue)
+                    .cinemindSecondaryTextStyle()
             }
         }
     }
@@ -1157,8 +1111,8 @@ public struct LibraryItemDetailView: View {
                 .font(.headline)
 
             if posterAssets.isEmpty {
-                Text("Not provided")
-                    .foregroundColor(.secondary)
+                Text(CineMindDisplayText.emptyValue)
+                    .cinemindSecondaryTextStyle()
             } else {
                 ForEach(posterAssets) { asset in
                     posterAssetRow(asset)
@@ -1176,7 +1130,7 @@ public struct LibraryItemDetailView: View {
                 Text(asset.isSelected ? "Selected" : "Available")
                     .font(.subheadline)
                 Spacer()
-                Text(asset.statusLabel)
+                Text(posterAssetStatusLabel(asset.statusLabel))
                     .font(.caption)
                     .foregroundColor(.secondary)
                 if !asset.isSelected {
@@ -1204,47 +1158,46 @@ public struct LibraryItemDetailView: View {
     }
 
     private func filesBlock(_ files: [LibraryFileSummary]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Files")
-                .font(.headline)
-
-            ForEach(files, id: \.mediaFileID) { file in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(file.fileName)
-                            .lineLimit(1)
-                        Text(file.fileSizeLabel)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Text(file.availabilityLabel)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    if let reason = file.playabilityReason {
-                        Text(reason)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .help(reason)
-                    }
-                    if file.isPlayable,
-                       let resumeLabel = file.resumePositionLabel {
-                        Text("Resume from \(resumeLabel)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    if file.isPlayable {
-                        let buttonState = filePlaybackButtonState(for: file)
-                        Button {
-                            performFilePlaybackAction(
-                                buttonState,
-                                mediaFileID: file.mediaFileID
-                            )
-                        } label: {
-                            Label(buttonState.title, systemImage: buttonState.systemImage)
+        LiquidGlassCard("Files", systemImage: "doc") {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(files, id: \.mediaFileID) { file in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(file.fileName)
+                                .lineLimit(1)
+                            Text(file.fileSizeLabel)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
-                        .controlSize(.small)
-                        .disabled(buttonState.isDisabled)
+                        Spacer()
+                        Text(fileAvailabilityLabel(file.availabilityLabel))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        if let reason = file.playabilityReason {
+                            Text(reason)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .help(reason)
+                        }
+                        if file.isPlayable,
+                           let resumeLabel = file.resumePositionLabel {
+                            Text("Resume from \(resumeLabel)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        if file.isPlayable {
+                            let buttonState = filePlaybackButtonState(for: file)
+                            Button {
+                                performFilePlaybackAction(
+                                    buttonState,
+                                    mediaFileID: file.mediaFileID
+                                )
+                            } label: {
+                                Label(buttonState.title, systemImage: buttonState.systemImage)
+                            }
+                            .controlSize(.small)
+                            .disabled(buttonState.isDisabled)
+                        }
                     }
                 }
             }
@@ -1352,6 +1305,43 @@ public struct LibraryItemDetailView: View {
     }
 
     private func displayValue(_ value: String?) -> String {
-        value ?? "Not provided"
+        CineMindDisplayText.value(value)
+    }
+
+    private func fileAvailabilityLabel(_ value: String) -> String {
+        switch value.lowercased() {
+        case "available":
+            "Available"
+        case "unavailable":
+            "Missing File"
+        case "folder unavailable":
+            "Folder Missing"
+        default:
+            CineMindDisplayText.friendlyStatus(value)
+        }
+    }
+
+    private func metadataStatusLabel(_ value: String) -> String {
+        switch value.lowercased() {
+        case "complete":
+            "Matched"
+        case "partial":
+            "Partial"
+        case "missing":
+            "Needs Metadata"
+        default:
+            CineMindDisplayText.friendlyStatus(value)
+        }
+    }
+
+    private func posterAssetStatusLabel(_ value: String) -> String {
+        switch value.lowercased() {
+        case "cached":
+            "Cached"
+        case "uncached":
+            "Remote Only"
+        default:
+            CineMindDisplayText.friendlyStatus(value)
+        }
     }
 }

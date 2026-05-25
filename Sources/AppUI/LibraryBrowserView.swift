@@ -12,9 +12,9 @@ public struct LibraryBrowserView: View {
     public var body: some View {
         VStack(spacing: 0) {
             workflowHeader
-            Divider()
             browserContent
         }
+        .background(Color.black.opacity(0.94))
         .task(id: viewModel.selectedSection) {
             await viewModel.load()
         }
@@ -22,30 +22,35 @@ public struct LibraryBrowserView: View {
 
     private var workflowHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Button {
-                    Task { await viewModel.addFolder() }
-                } label: {
-                    Label("Add Folder", systemImage: "folder.badge.plus")
-                }
+            HStack {
+                LiquidGlassPanel(
+                    cornerRadius: 18,
+                    material: .thinMaterial,
+                    padding: EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 12)
+                ) {
+                    HStack(spacing: 8) {
+                        Button {
+                            Task { await viewModel.addFolder() }
+                        } label: {
+                            Label("Add Folder", systemImage: "folder.badge.plus")
+                        }
+                        .buttonStyle(.liquidGlassPrimary)
+                        .disabled(workflowIsBusy)
 
-                Button {
-                    Task { await viewModel.scanLibrary() }
-                } label: {
-                    Label("Scan", systemImage: "arrow.clockwise")
-                }
+                        Button {
+                            Task { await viewModel.scanLibrary() }
+                        } label: {
+                            Label("Scan", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.liquidGlass)
+                        .disabled(workflowIsBusy)
 
-                if viewModel.isAddingFolder {
-                    ProgressView("Adding folder...")
-                        .controlSize(.small)
-                } else if viewModel.isScanning {
-                    ProgressView("Scanning...")
-                        .controlSize(.small)
+                        workflowProgressLabel
+                    }
                 }
 
                 Spacer()
             }
-            .disabled(viewModel.isAddingFolder || viewModel.isScanning)
 
             if let workflowErrorMessage = viewModel.workflowErrorMessage {
                 Text(workflowErrorMessage)
@@ -53,15 +58,34 @@ public struct LibraryBrowserView: View {
                     .foregroundColor(.red)
             } else if let workflowMessage = viewModel.workflowMessage {
                 Text(workflowMessage)
-                    .font(.callout)
-                    .foregroundColor(.secondary)
+                    .font(.caption)
+                    .cinemindSecondaryTextStyle()
             }
 
             if let lastScanResult = viewModel.lastScanResult {
                 scanResultSummary(lastScanResult)
             }
         }
-        .padding(12)
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+
+    private var workflowIsBusy: Bool {
+        viewModel.isAddingFolder || viewModel.isScanning
+    }
+
+    @ViewBuilder
+    private var workflowProgressLabel: some View {
+        if viewModel.isAddingFolder {
+            ProgressView("Adding...")
+                .controlSize(.small)
+                .font(.caption)
+        } else if viewModel.isScanning {
+            ProgressView("Scanning...")
+                .controlSize(.small)
+                .font(.caption)
+        }
     }
 
     @ViewBuilder
@@ -84,16 +108,38 @@ public struct LibraryBrowserView: View {
 
     private func scanResultSummary(_ result: LibraryScanResultSummary) -> some View {
         Text(
-            "Status: \(result.statusLabel) • Files discovered: \(result.counts.filesDiscovered) • Media items: \(result.counts.mediaItemsCreated) created, \(result.counts.mediaItemsUpdated) updated • Issues: \(result.counts.issuesRecorded)"
+            "\(CineMindDisplayText.friendlyStatus(result.statusLabel)): \(result.counts.filesDiscovered) files, \(result.counts.mediaItemsCreated) created, \(result.counts.mediaItemsUpdated) updated, \(result.counts.issuesRecorded) issues"
         )
         .font(.caption)
-        .foregroundColor(.secondary)
+        .cinemindSecondaryTextStyle()
     }
 
     private var emptyContent: some View {
-        Text(viewModel.selectedSection == .folders ? "No folders found" : "No media found")
-            .foregroundColor(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        LiquidGlassCard {
+            VStack(spacing: 12) {
+                Image(systemName: viewModel.selectedSection == .folders ? "folder" : "film.stack")
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+
+                Text(viewModel.selectedSection == .folders ? "No folders yet" : "No media yet")
+                    .cinemindSectionTitleStyle()
+
+                Text("Add a folder to start building your library.")
+                    .font(.callout)
+                    .cinemindSecondaryTextStyle()
+                    .multilineTextAlignment(.center)
+
+                Button {
+                    Task { await viewModel.addFolder() }
+                } label: {
+                    Label("Add Folder", systemImage: "folder.badge.plus")
+                }
+                .buttonStyle(.liquidGlassPrimary)
+                .disabled(workflowIsBusy)
+            }
+            .frame(maxWidth: 340)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func errorContent(message: String) -> some View {
@@ -113,28 +159,108 @@ public struct LibraryBrowserView: View {
     private func mediaTableContent(items: [LibraryItemSummary]) -> some View {
         Table(of: LibraryItemSummary.self, selection: $viewModel.selectedItemID) {
             TableColumn("Title") { item in
-                Text(item.displayTitle)
+                mediaTitleCell(item)
             }
             TableColumn("Type") { item in
-                Text(item.mediaTypeLabel)
+                tableStatusLabel(
+                    item.mediaTypeLabel,
+                    systemImage: item.mediaTypeLabel == "TV Episode" ? "tv" : "film",
+                    color: .secondary
+                )
             }
             TableColumn("Year / Episode") { item in
-                Text(item.yearOrEpisodeLabel ?? "—")
+                Text(item.yearOrEpisodeLabel ?? CineMindDisplayText.emptyValue)
             }
             TableColumn("Availability") { item in
-                Text(item.availabilityLabel)
+                let descriptor = availabilityDescriptor(item.availabilityLabel)
+                tableStatusLabel(
+                    descriptor.title,
+                    systemImage: descriptor.systemImage,
+                    color: descriptor.color
+                )
             }
             TableColumn("Metadata") { item in
-                Text(item.metadataLabel)
+                let descriptor = metadataDescriptor(item.metadataLabel)
+                tableStatusLabel(
+                    descriptor.title,
+                    systemImage: descriptor.systemImage,
+                    color: descriptor.color
+                )
             }
             TableColumn("Last Played") { item in
-                Text(item.lastPlayedLabel ?? "—")
+                Text(item.lastPlayedLabel ?? CineMindDisplayText.emptyValue)
             }
         } rows: {
             ForEach(items) { item in
                 TableRow(item)
             }
         }
+    }
+
+    private func mediaTitleCell(_ item: LibraryItemSummary) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: item.mediaTypeLabel == "TV Episode" ? "tv" : "film")
+                .foregroundStyle(.secondary)
+
+            Text(item.displayTitle)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 5)
+    }
+
+    private func tableStatusLabel(
+        _ title: String,
+        systemImage: String,
+        color: Color
+    ) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .imageScale(.small)
+            Text(title)
+                .lineLimit(1)
+        }
+        .font(.callout)
+        .foregroundStyle(color)
+    }
+
+    private func availabilityDescriptor(_ label: String) -> TableStatusDescriptor {
+        switch label.lowercased() {
+        case "available":
+            TableStatusDescriptor(title: "Available", systemImage: "checkmark.circle.fill", color: .green)
+        case "unavailable", "no files":
+            TableStatusDescriptor(title: "Missing File", systemImage: "xmark.circle.fill", color: .red)
+        case "partially available":
+            TableStatusDescriptor(title: "Partial", systemImage: "exclamationmark.circle.fill", color: .yellow)
+        default:
+            TableStatusDescriptor(
+                title: CineMindDisplayText.friendlyStatus(label),
+                systemImage: "info.circle",
+                color: .secondary
+            )
+        }
+    }
+
+    private func metadataDescriptor(_ label: String) -> TableStatusDescriptor {
+        switch label.lowercased() {
+        case "complete":
+            TableStatusDescriptor(title: "Matched", systemImage: "checkmark.seal.fill", color: .green)
+        case "partial":
+            TableStatusDescriptor(title: "Partial", systemImage: "exclamationmark.circle.fill", color: .yellow)
+        case "missing":
+            TableStatusDescriptor(title: "Needs Metadata", systemImage: "tag.fill", color: .accentColor)
+        default:
+            TableStatusDescriptor(
+                title: CineMindDisplayText.friendlyStatus(label),
+                systemImage: "tag",
+                color: .secondary
+            )
+        }
+    }
+
+    private struct TableStatusDescriptor {
+        let title: String
+        let systemImage: String
+        let color: Color
     }
 
     private func folderTableContent(folders: [LibraryFolderSummary]) -> some View {
@@ -146,16 +272,21 @@ public struct LibraryBrowserView: View {
                 Text(folder.rootPath)
             }
             TableColumn("Availability") { folder in
-                Text(folder.availabilityLabel)
+                let descriptor = availabilityDescriptor(folder.availabilityLabel)
+                tableStatusLabel(
+                    descriptor.title,
+                    systemImage: descriptor.systemImage,
+                    color: descriptor.color
+                )
             }
             TableColumn("Files") { folder in
                 Text(folder.fileCountLabel)
             }
             TableColumn("Last Seen") { folder in
-                Text(folder.lastSeenLabel ?? "—")
+                Text(folder.lastSeenLabel ?? CineMindDisplayText.emptyValue)
             }
             TableColumn("Last Scan") { folder in
-                Text(folder.lastScanLabel ?? "—")
+                Text(folder.lastScanLabel ?? CineMindDisplayText.emptyValue)
             }
         } rows: {
             ForEach(folders) { folder in

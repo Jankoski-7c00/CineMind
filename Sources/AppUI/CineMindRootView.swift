@@ -13,14 +13,17 @@ public struct CineMindRootView: View {
     }
 
     public var body: some View {
-        switch viewModel.state {
-        case .loading:
-            loadingView
-        case .ready:
-            shellView
-        case .failed(let message):
-            errorView(message)
+        Group {
+            switch viewModel.state {
+            case .loading:
+                loadingView
+            case .ready:
+                shellView
+            case .failed(let message):
+                errorView(message)
+            }
         }
+        .preferredColorScheme(.dark)
     }
 
     private var loadingView: some View {
