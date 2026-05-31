@@ -88,6 +88,7 @@ public final class AVFoundationPlaybackBackend: PlaybackBackend, @unchecked Send
         let target = CMTime(value: CMTimeValue(positionMS), timescale: 1000)
         player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] completed in
             guard completed else {
+                self?.emitPositionIfChanged(player.currentTime(), generation: generation)
                 return
             }
             self?.emitPositionIfChanged(positionMS, generation: generation)
@@ -295,9 +296,10 @@ public final class AVFoundationPlaybackBackend: PlaybackBackend, @unchecked Send
             return
         case .readyToPlay:
             emitDurationIfChanged(item.duration, generation: generation)
-            seekToPendingResumePositionIfNeeded(item: item, generation: generation)
             emitTracksDiscovered(item: item, generation: generation)
-            emitReady(generation: generation)
+            if !seekToPendingResumePositionIfNeeded(item: item, generation: generation) {
+                emitReady(generation: generation)
+            }
         case .failed:
             emitFailure(Self.playbackError(from: item.error), generation: generation)
         @unknown default:
@@ -322,26 +324,68 @@ public final class AVFoundationPlaybackBackend: PlaybackBackend, @unchecked Send
         }
     }
 
-    private func seekToPendingResumePositionIfNeeded(item: AVPlayerItem, generation: UInt64) {
+    private func seekToPendingResumePositionIfNeeded(item: AVPlayerItem, generation: UInt64) -> Bool {
         let pendingPositionMS: Int? = withLock {
-            guard state.isActive(generation), let positionMS = state.pendingResumePositionMS else {
+            guard state.isActive(generation),
+                  !state.isResumeSeekInFlight,
+                  let positionMS = state.pendingResumePositionMS else {
                 return nil
             }
 
-            state.pendingResumePositionMS = nil
+            state.isResumeSeekInFlight = true
             return positionMS
         }
 
         guard let pendingPositionMS else {
-            return
+            return false
         }
 
         let target = CMTime(value: CMTimeValue(pendingPositionMS), timescale: 1000)
         item.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] completed in
-            guard completed else {
+            guard let self else {
                 return
             }
-            self?.emitPositionIfChanged(pendingPositionMS, generation: generation)
+            guard completed else {
+                self.failPendingResumeSeek(generation: generation)
+                return
+            }
+            self.completePendingResumeSeek(positionMS: pendingPositionMS, generation: generation)
+        }
+        return true
+    }
+
+    private func completePendingResumeSeek(positionMS: Int, generation: UInt64) {
+        let shouldEmitReady = withLock {
+            guard state.isActive(generation), !state.didFinish else {
+                return false
+            }
+
+            state.pendingResumePositionMS = nil
+            state.isResumeSeekInFlight = false
+            return true
+        }
+
+        guard shouldEmitReady else {
+            return
+        }
+
+        emitPositionIfChanged(positionMS, generation: generation)
+        emitReady(generation: generation)
+    }
+
+    private func failPendingResumeSeek(generation: UInt64) {
+        let shouldEmitFailure = withLock {
+            guard state.isActive(generation), !state.didFinish else {
+                return false
+            }
+
+            state.pendingResumePositionMS = nil
+            state.isResumeSeekInFlight = false
+            return true
+        }
+
+        if shouldEmitFailure {
+            emitFailure(.unknown("AVFoundation could not seek to the saved resume position."), generation: generation)
         }
     }
 
@@ -662,6 +706,7 @@ private struct BackendState {
     var endNotificationObserver: NSObjectProtocol?
     var failureNotificationObserver: NSObjectProtocol?
     var pendingResumePositionMS: Int?
+    var isResumeSeekInFlight = false
     var isReady = false
     var didFinish = false
     var isShutdown = false
@@ -699,6 +744,7 @@ private struct BackendState {
         endNotificationObserver = nil
         failureNotificationObserver = nil
         pendingResumePositionMS = nil
+        isResumeSeekInFlight = false
         isReady = false
         didFinish = false
         lastPositionMS = nil

@@ -314,7 +314,17 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         )
         XCTAssertEqual(fixture.mediaOpening.calls, [file.mediaFileID, "missing-next-file"])
         XCTAssertEqual(fixture.progressStore.saveCalls, [])
-        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                notice: "Could not open media file."
+            ),
+            statuses: &statuses
+        )
     }
 
     func testPlaybackFailureProducesUserSafeFailure() async throws {
@@ -381,6 +391,41 @@ final class PlaybackApplicationControllerTests: XCTestCase {
             [.load(playbackPlayableFile(from: file)), .play, .stop],
             backend: fixture.backend
         )
+    }
+
+    func testQueuedReadyAfterStopDoesNotRestoreStoppedSession() async throws {
+        let file = try makeApplicationPlayableFile("queued-ready-after-stop")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await discardNextStatus(statuses: &statuses)
+
+        fixture.backend.emit(.stateChanged(.ready))
+        await fixture.controller.stop()
+
+        let firstStatus = try await nextStatus(statuses: &statuses)
+        if firstStatus.state == .ready {
+            try await assertNextStatus(.idle, statuses: &statuses)
+        } else {
+            XCTAssertEqual(firstStatus, .idle)
+        }
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
+    }
+
+    func testInvalidPlaybackFailureAfterStopIsIgnored() async throws {
+        let file = try makeApplicationPlayableFile("invalid-failure-after-stop")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        await fixture.controller.stop()
+        try await assertNextStatus(.idle, statuses: &statuses)
+
+        fixture.backend.emit(.playbackFailed(.invalidState("play is invalid while playback is idle")))
+
+        try await assertNoStatus(PlaybackStatusReader(existingIterator: statuses))
     }
 
     func testShutdownStopsAndPersistsProgressBeforeBackendShutdown() async throws {
@@ -1293,6 +1338,30 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         )
     }
 
+    func testProgressSaveFailureEmitsNoticeWithoutFailingPlayback() async throws {
+        let file = try makeApplicationPlayableFile("seek-save-failure")
+        let fixture = makeFixture(files: [file])
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        try await openAndReachPlaying(file: file, fixture: fixture, statuses: &statuses)
+
+        fixture.progressStore.setSaveError(ProgressStoreError())
+        await fixture.controller.seek(toMS: 30_000)
+        fixture.backend.emit(.positionUpdated(positionMS: 30_000))
+
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 30_000,
+                durationMS: nil,
+                notice: "Could not save playback progress."
+            ),
+            statuses: &statuses
+        )
+    }
+
     func testSeekIdleIsNoOp() async throws {
         let fixture = makeFixture(files: [:])
         let statuses = PlaybackStatusReader(fixture.controller.statusStream)
@@ -1572,6 +1641,8 @@ private enum PlaybackApplicationControllerTestError: Error {
     case missingSubtitleText
 }
 
+private struct ProgressStoreError: Error {}
+
 private final class PlaybackStatusReader: @unchecked Sendable {
     private var iterator: AsyncStream<PlaybackApplicationStatus>.Iterator
 
@@ -1837,6 +1908,7 @@ private final class RecordingProgressStore: PlaybackProgressStore, @unchecked Se
     private var recordedSaveCalls: [SaveCall] = []
     private var recordedIncrementCalls: [IncrementCall] = []
     private var recordedOperations: [ProgressOperation] = []
+    private var saveError: (any Error)?
 
     var saveCalls: [SaveCall] {
         withLock {
@@ -1856,6 +1928,12 @@ private final class RecordingProgressStore: PlaybackProgressStore, @unchecked Se
         }
     }
 
+    func setSaveError(_ error: (any Error)?) {
+        withLock {
+            saveError = error
+        }
+    }
+
     func savePlaybackProgress(
         mediaItemID: MediaItemID,
         mediaFileID: MediaFileID,
@@ -1864,6 +1942,13 @@ private final class RecordingProgressStore: PlaybackProgressStore, @unchecked Se
         completed: Bool,
         playedAt: Date
     ) throws {
+        let error = withLock {
+            saveError
+        }
+        if let error {
+            throw error
+        }
+
         withLock {
             recordedSaveCalls.append(
                 SaveCall(

@@ -67,6 +67,19 @@ final class PlaybackAVFoundationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(position, 900)
     }
 
+    func testResumePositionIsEmittedBeforeReady() async throws {
+        let backend = AVFoundationPlaybackBackend()
+        addTeardownBlock {
+            await backend.shutdown()
+        }
+        let events = PlaybackEventReader(backend.events)
+
+        try await backend.load(playableFile: makeFixturePlayableFile(resumePositionMS: 1_000))
+
+        let position = try await events.waitForPositionBeforeReady(atLeast: 900)
+        XCTAssertGreaterThanOrEqual(position, 900)
+    }
+
     func testUnknownTrackCommandsAreNoopsAndStopEmitsIdle() async throws {
         let backend = AVFoundationPlaybackBackend()
         addTeardownBlock {
@@ -99,6 +112,7 @@ final class PlaybackAVFoundationTests: XCTestCase {
     }
 
     private func makeFixturePlayableFile(
+        resumePositionMS: Int? = nil,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws -> PlayableFile {
@@ -116,7 +130,7 @@ final class PlaybackAVFoundationTests: XCTestCase {
             mediaFileID: "avfoundation-media-file",
             url: fixtureURL,
             displayName: "AVFoundation Fixture",
-            resumePositionMS: nil
+            resumePositionMS: resumePositionMS
         )
     }
 }
@@ -192,6 +206,35 @@ private final class PlaybackEventReader: @unchecked Sendable {
             throw PlaybackAVFoundationTestError.unexpectedEvent
         }
         return positionMS
+    }
+
+    func waitForPositionBeforeReady(
+        atLeast minimumPositionMS: Int,
+        timeoutNanoseconds: UInt64 = 5_000_000_000,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> Int {
+        let deadline = Date().addingTimeInterval(Double(timeoutNanoseconds) / 1_000_000_000)
+
+        while Date() < deadline {
+            guard let event = try await next(timeoutNanoseconds: 500_000_000) else {
+                XCTFail("Playback event stream finished before resume position arrived", file: file, line: line)
+                throw PlaybackAVFoundationTestError.streamFinished
+            }
+
+            switch event {
+            case .positionUpdated(let positionMS) where positionMS >= minimumPositionMS:
+                return positionMS
+            case .stateChanged(.ready):
+                XCTFail("Ready arrived before the resume position was emitted", file: file, line: line)
+                throw PlaybackAVFoundationTestError.unexpectedEvent
+            default:
+                break
+            }
+        }
+
+        XCTFail("Timed out waiting for resume position", file: file, line: line)
+        throw PlaybackAVFoundationTestError.timeout
     }
 
     func waitForMatching(

@@ -190,7 +190,7 @@ public actor PlaybackCoordinator {
         }
 
         if activeSession != nil {
-            await stopActiveSession(emitIdle: true)
+            _ = await stopActiveSession(emitIdle: true)
         }
 
         guard !isShutdown else {
@@ -270,12 +270,13 @@ public actor PlaybackCoordinator {
         }
     }
 
-    public func stop() async {
+    @discardableResult
+    public func stop() async -> Bool {
         guard !isShutdown else {
-            return
+            return false
         }
 
-        await stopActiveSession(emitIdle: true)
+        return await stopActiveSession(emitIdle: true)
     }
 
     public func selectAudioTrack(trackID: String) async {
@@ -359,9 +360,9 @@ public actor PlaybackCoordinator {
         return currentSessionGeneration
     }
 
-    private func stopActiveSession(emitIdle: Bool) async {
+    private func stopActiveSession(emitIdle: Bool) async -> Bool {
         guard activeSession != nil else {
-            return
+            return false
         }
 
         currentSessionGeneration &+= 1
@@ -376,7 +377,7 @@ public actor PlaybackCoordinator {
         }
 
         guard !isShutdown, currentSessionGeneration == stopGeneration else {
-            return
+            return false
         }
 
         activeSession = nil
@@ -384,6 +385,7 @@ public actor PlaybackCoordinator {
         if emitIdle {
             emit(.stateChanged(.idle))
         }
+        return emitIdle
     }
 
     private func startBackendEventTask(for generation: UInt64) {

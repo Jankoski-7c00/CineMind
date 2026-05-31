@@ -48,6 +48,7 @@ public struct PlaybackApplicationStatus: Sendable, Equatable {
     public let audioTracks: [PlaybackApplicationTrack]
     public let subtitleTracks: [PlaybackApplicationTrack]
     public let activeSubtitleText: String?
+    public let notice: String?
 
     public init(
         state: PlaybackApplicationState,
@@ -57,7 +58,8 @@ public struct PlaybackApplicationStatus: Sendable, Equatable {
         durationMS: Int?,
         audioTracks: [PlaybackApplicationTrack] = [],
         subtitleTracks: [PlaybackApplicationTrack] = [],
-        activeSubtitleText: String? = nil
+        activeSubtitleText: String? = nil,
+        notice: String? = nil
     ) {
         self.state = state
         self.mediaFileID = mediaFileID
@@ -67,6 +69,7 @@ public struct PlaybackApplicationStatus: Sendable, Equatable {
         self.audioTracks = audioTracks
         self.subtitleTracks = subtitleTracks
         self.activeSubtitleText = activeSubtitleText
+        self.notice = notice
     }
 
     public static let idle = PlaybackApplicationStatus(
@@ -118,7 +121,7 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling, Play
     private var progressSessionOpen = false
     private var didAutoPlayActiveSession = false
     private var lastEmittedStatus: PlaybackApplicationStatus?
-    private var suppressedCoordinatorIdleEventCount = 0
+    private var shouldSuppressNextCoordinatorIdle = false
 
     public init(
         coordinator: PlaybackCoordinator,
@@ -153,6 +156,7 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling, Play
             playableFile = try mediaOpening.open(mediaFileID: mediaFileID)
         } catch {
             guard !activeSessionShouldIgnoreRepeatedOpen else {
+                emitCurrentStatus(notice: "Could not open media file.")
                 return
             }
 
@@ -199,13 +203,17 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling, Play
     public func stop() async {
         startEventLoopIfNeeded()
 
-        if activeMediaFileID != nil || progressSessionOpen {
-            suppressedCoordinatorIdleEventCount += 1
+        let shouldSuppressCoordinatorIdle = activeMediaFileID != nil || progressSessionOpen
+        if shouldSuppressCoordinatorIdle {
+            shouldSuppressNextCoordinatorIdle = true
         }
-        await coordinator.stop()
-        await closeProgressSessionIfOpen()
+        let didStopCoordinatorSession = await coordinator.stop()
+        if shouldSuppressCoordinatorIdle, !didStopCoordinatorSession {
+            shouldSuppressNextCoordinatorIdle = false
+        }
+        let closeNotice = await closeProgressSessionIfOpen()
         resetActiveSession()
-        emitStatus(.idle, force: true)
+        emitStatus(idleStatus(notice: closeNotice), force: true)
     }
 
     public func pause() async {
@@ -407,102 +415,123 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling, Play
             return
         }
 
-        await handleProgressEvent(event)
+        if shouldIgnoreStaleCoordinatorEvent(event) {
+            return
+        }
+
+        let progressNotice = await progressNotice(for: event)
 
         switch event {
         case .stateChanged(let playbackState):
-            await handlePlaybackState(playbackState)
+            await handlePlaybackState(playbackState, notice: progressNotice)
         case .positionUpdated(let positionMS):
             currentPositionMS = max(0, positionMS)
             updateActiveSubtitleText()
-            emitCurrentStatus()
+            emitCurrentStatus(notice: progressNotice)
         case .durationUpdated(let durationMS):
             currentDurationMS = max(0, durationMS)
-            emitCurrentStatus()
+            emitCurrentStatus(notice: progressNotice)
         case .playbackEnded(let finalPositionMS, let durationMS):
             currentPositionMS = max(0, finalPositionMS)
             currentDurationMS = durationMS.map { max(0, $0) }
             currentState = .ended
-            emitCurrentStatus()
-            await closeProgressSessionIfOpen()
+            emitCurrentStatus(notice: progressNotice)
+            if let closeNotice = await closeProgressSessionIfOpen() {
+                emitCurrentStatus(notice: closeNotice)
+            }
         case .playbackFailed(let error):
             currentState = .failed(userSafeMessage(forPlaybackError: error))
-            emitCurrentStatus()
+            emitCurrentStatus(notice: progressNotice)
         case .tracksDiscovered(let audioTracks, let subtitleTracks):
             currentAudioTracks = Self.mapTracks(audioTracks, fallbackPrefix: "Audio")
             currentSubtitleTracks = Self.mapTracks(subtitleTracks, fallbackPrefix: "Subtitle")
-            emitCurrentStatus()
+            emitCurrentStatus(notice: progressNotice)
         }
     }
 
-    private func handlePlaybackState(_ playbackState: PlaybackState) async {
+    private func handlePlaybackState(_ playbackState: PlaybackState, notice: String?) async {
         switch playbackState {
         case .idle:
-            await closeProgressSessionIfOpen()
+            let closeNotice = await closeProgressSessionIfOpen()
             resetActiveSession()
-            emitStatus(.idle)
+            emitStatus(idleStatus(notice: closeNotice ?? notice))
         case .loading:
             currentState = .loading
-            emitCurrentStatus()
+            emitCurrentStatus(notice: notice)
         case .ready:
             currentState = .ready
-            emitCurrentStatus()
+            emitCurrentStatus(notice: notice)
             if activeMediaFileID != nil, !didAutoPlayActiveSession {
                 didAutoPlayActiveSession = true
                 await coordinator.play()
             }
         case .playing:
             currentState = .playing
-            emitCurrentStatus()
+            emitCurrentStatus(notice: notice)
         case .paused:
             currentState = .paused
-            emitCurrentStatus()
+            emitCurrentStatus(notice: notice)
         case .buffering:
             currentState = .buffering
-            emitCurrentStatus()
+            emitCurrentStatus(notice: notice)
         case .ended:
             currentState = .ended
-            emitCurrentStatus()
-            await closeProgressSessionIfOpen()
+            emitCurrentStatus(notice: notice)
+            if let closeNotice = await closeProgressSessionIfOpen() {
+                emitCurrentStatus(notice: closeNotice)
+            }
         case .failed:
             if case .failed = currentState {
                 return
             }
             currentState = .failed("Playback failed.")
-            emitCurrentStatus()
+            emitCurrentStatus(notice: notice)
         }
     }
 
     private func shouldSuppressCoordinatorEvent(_ event: PlaybackEvent) -> Bool {
         guard case .stateChanged(.idle) = event,
-              suppressedCoordinatorIdleEventCount > 0 else {
+              shouldSuppressNextCoordinatorIdle else {
             return false
         }
 
-        suppressedCoordinatorIdleEventCount -= 1
+        shouldSuppressNextCoordinatorIdle = false
         return true
     }
 
-    private func handleProgressEvent(_ event: PlaybackEvent) async {
-        do {
-            try await progressCoordinator.handle(event)
-        } catch {
-            currentState = .failed("Could not save playback progress.")
-            emitCurrentStatus()
+    private func shouldIgnoreStaleCoordinatorEvent(_ event: PlaybackEvent) -> Bool {
+        guard activeMediaFileID == nil else {
+            return false
+        }
+
+        switch event {
+        case .stateChanged(.idle):
+            return false
+        case .stateChanged, .positionUpdated, .durationUpdated, .playbackEnded, .playbackFailed, .tracksDiscovered:
+            return true
         }
     }
 
-    private func closeProgressSessionIfOpen() async {
+    private func progressNotice(for event: PlaybackEvent) async -> String? {
+        do {
+            try await progressCoordinator.handle(event)
+            return nil
+        } catch {
+            return "Could not save playback progress."
+        }
+    }
+
+    private func closeProgressSessionIfOpen() async -> String? {
         guard progressSessionOpen else {
-            return
+            return nil
         }
 
         progressSessionOpen = false
         do {
             try await progressCoordinator.closeSession()
+            return nil
         } catch {
-            currentState = .failed("Could not save playback progress.")
-            emitCurrentStatus()
+            return "Could not save playback progress."
         }
     }
 
@@ -522,7 +551,7 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling, Play
         didAutoPlayActiveSession = false
     }
 
-    private func emitCurrentStatus() {
+    private func emitCurrentStatus(notice: String? = nil) {
         emitStatus(
             PlaybackApplicationStatus(
                 state: currentState,
@@ -532,8 +561,20 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling, Play
                 durationMS: currentDurationMS,
                 audioTracks: currentAudioTracks,
                 subtitleTracks: currentSubtitleTracks + currentExternalSubtitleTracks,
-                activeSubtitleText: activeSubtitleText
+                activeSubtitleText: activeSubtitleText,
+                notice: notice
             )
+        )
+    }
+
+    private func idleStatus(notice: String?) -> PlaybackApplicationStatus {
+        PlaybackApplicationStatus(
+            state: .idle,
+            mediaFileID: nil,
+            displayName: nil,
+            positionMS: 0,
+            durationMS: nil,
+            notice: notice
         )
     }
 

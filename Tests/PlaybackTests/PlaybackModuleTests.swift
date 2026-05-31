@@ -85,12 +85,25 @@ final class PlaybackModuleTests: XCTestCase {
         let file = makePlayableFile("stop")
         try await openAndReachReady(file, coordinator: coordinator, backend: backend, events: &events)
 
-        await coordinator.stop()
+        let didStop = await coordinator.stop()
 
+        XCTAssertTrue(didStop)
         await assertCommands([.load(file), .stop], backend: backend)
         try await assertNextEvent(.stateChanged(.idle), events: &events)
         await assertState(.idle, coordinator: coordinator)
         await assertNoActiveSession(coordinator)
+    }
+
+    func testStopWithoutActiveSessionReturnsFalseAndDoesNotEmitIdle() async throws {
+        let backend = FakePlaybackBackend()
+        let coordinator = PlaybackCoordinator(backend: backend)
+        let events = PlaybackEventReader(coordinator.events)
+
+        let didStop = await coordinator.stop()
+
+        XCTAssertFalse(didStop)
+        await assertCommands([], backend: backend)
+        await assertNoEvent(events)
     }
 
     func testOpeningSecondFileStopsPreviousSession() async throws {
@@ -137,8 +150,9 @@ final class PlaybackModuleTests: XCTestCase {
         try await openAndReachReady(file, coordinator: coordinator, backend: backend, events: &events)
         await backend.setStopError(.mpvError("stop failed"))
 
-        await coordinator.stop()
+        let didStop = await coordinator.stop()
 
+        XCTAssertTrue(didStop)
         try await assertNextEvent(.playbackFailed(.mpvError("stop failed")), events: &events)
         try await assertNextEvent(.stateChanged(.idle), events: &events)
         await assertState(.idle, coordinator: coordinator)
@@ -295,9 +309,10 @@ final class PlaybackModuleTests: XCTestCase {
         await coordinator.pause()
         await coordinator.seek(toMS: 1_000)
         await coordinator.selectSubtitleTrack(trackID: "s1")
-        await coordinator.stop()
+        let didStopAfterShutdown = await coordinator.stop()
         await coordinator.open(makePlayableFile("after-shutdown"))
 
+        XCTAssertFalse(didStopAfterShutdown)
         await assertCommands([.load(file), .shutdown], backend: backend)
         await assertState(.idle, coordinator: coordinator)
         await assertNoActiveSession(coordinator)
@@ -368,6 +383,28 @@ final class PlaybackModuleTests: XCTestCase {
         return event
     }
 
+    private func assertNoEvent(
+        _ events: PlaybackEventReader,
+        timeoutNanoseconds: UInt64 = 20_000_000,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        let event = await withTaskGroup(of: PlaybackEvent?.self) { group in
+            group.addTask {
+                await events.next()
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return nil
+            }
+
+            let event = await group.next() ?? nil
+            group.cancelAll()
+            return event
+        }
+        XCTAssertNil(event, file: file, line: line)
+    }
+
     private func makePlayableFile(_ name: String) -> PlayableFile {
         PlayableFile(
             mediaItemID: "media-item-\(name)",
@@ -381,6 +418,18 @@ final class PlaybackModuleTests: XCTestCase {
 
 private enum PlaybackTestError: Error {
     case missingEvent
+}
+
+private final class PlaybackEventReader: @unchecked Sendable {
+    private var iterator: AsyncStream<PlaybackEvent>.Iterator
+
+    init(_ stream: AsyncStream<PlaybackEvent>) {
+        self.iterator = stream.makeAsyncIterator()
+    }
+
+    func next() async -> PlaybackEvent? {
+        await iterator.next()
+    }
 }
 
 private enum FakeBackendCommand: Equatable {

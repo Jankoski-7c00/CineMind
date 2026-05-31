@@ -1094,6 +1094,11 @@ public struct LibraryItemDetailView: View {
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
+                            if let notice = status.notice, !notice.isEmpty {
+                                Text(notice)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                         Spacer()
                         playbackControls(for: status.state)
