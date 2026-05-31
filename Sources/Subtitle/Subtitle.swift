@@ -325,10 +325,24 @@ public struct SubtitleSearchResult: Sendable, Equatable, Identifiable {
 }
 
 public struct SubtitleDownloadResult: Sendable, Equatable {
-    public let asset: SubtitleAsset
+    public let resultID: String
+    public let suggestedFileName: String?
+    public let languageCode: String?
+    public let format: SubtitleFormat
+    public let content: String
 
-    public init(asset: SubtitleAsset) {
-        self.asset = asset
+    public init(
+        resultID: String,
+        suggestedFileName: String? = nil,
+        languageCode: String? = nil,
+        format: SubtitleFormat,
+        content: String
+    ) {
+        self.resultID = resultID
+        self.suggestedFileName = suggestedFileName
+        self.languageCode = languageCode
+        self.format = format
+        self.content = content
     }
 }
 

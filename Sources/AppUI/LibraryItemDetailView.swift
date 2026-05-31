@@ -24,6 +24,13 @@ public enum MetadataActionStatus: Equatable, Sendable {
     case error(String)
 }
 
+public enum SubtitleActionStatus: Equatable, Sendable {
+    case idle
+    case loading(String)
+    case success(String)
+    case error(String)
+}
+
 private enum FilePlaybackButtonState {
     case play
     case resume
@@ -67,11 +74,18 @@ public final class LibraryItemDetailViewModel: ObservableObject {
     @Published public private(set) var metadataCandidates: [LibraryMetadataCandidate] = []
     @Published public private(set) var isSearchingMetadataCandidates = false
     @Published public private(set) var metadataMutationRevision = 0
+    @Published public private(set) var subtitleActionStatus: SubtitleActionStatus = .idle
+    @Published public private(set) var subtitleCandidates: [LibrarySubtitleCandidate] = []
+    @Published public private(set) var isSearchingSubtitleCandidates = false
+    @Published public private(set) var downloadingSubtitleResultID: String?
+    @Published public private(set) var installedSubtitleResultIDs: Set<String> = []
 
     private let detailBrowser: any LibraryItemDetailBrowsing
     private let posterImageLoader: any PosterImageLoading
     private let metadataActions: (any LibraryMetadataActionHandling)?
     public let metadataActionsUnavailableMessage: String?
+    private let subtitleActions: (any LibrarySubtitleActionHandling)?
+    public let subtitleActionsUnavailableMessage: String?
     private var playbackController: (any PlaybackApplicationControlling)?
     private var playbackStatusTask: Task<Void, Never>?
     private var currentItemID: MediaItemID?
@@ -81,12 +95,16 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         detailBrowser: any LibraryItemDetailBrowsing,
         playbackController: (any PlaybackApplicationControlling)? = nil,
         metadataActions: (any LibraryMetadataActionHandling)? = nil,
-        metadataActionsUnavailableMessage: String? = nil
+        metadataActionsUnavailableMessage: String? = nil,
+        subtitleActions: (any LibrarySubtitleActionHandling)? = nil,
+        subtitleActionsUnavailableMessage: String? = nil
     ) {
         self.detailBrowser = detailBrowser
         self.posterImageLoader = LocalPosterImageLoader()
         self.metadataActions = metadataActions
         self.metadataActionsUnavailableMessage = metadataActionsUnavailableMessage
+        self.subtitleActions = subtitleActions
+        self.subtitleActionsUnavailableMessage = subtitleActionsUnavailableMessage
         setPlaybackController(playbackController)
     }
 
@@ -127,6 +145,7 @@ public final class LibraryItemDetailViewModel: ObservableObject {
             metadataActionStatus = .idle
             metadataCandidates = []
             isSearchingMetadataCandidates = false
+            resetSubtitleActionState()
             return
         }
 
@@ -135,6 +154,7 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         currentItemID = id
         detailState = .loading
         posterImageState = .idle
+        resetSubtitleActionState()
 
         do {
             let result = try await detailBrowser.fetchDetail(id: id)
@@ -166,6 +186,14 @@ public final class LibraryItemDetailViewModel: ObservableObject {
 
     public var metadataActionsAvailable: Bool {
         metadataActions != nil
+    }
+
+    public var subtitleActionsAvailable: Bool {
+        subtitleActions != nil
+    }
+
+    public var subtitleTargetAvailable: Bool {
+        subtitleTargetMediaFileID() != nil
     }
 
     public func refreshMetadata() {
@@ -240,6 +268,72 @@ public final class LibraryItemDetailViewModel: ObservableObject {
                 mediaItemID: mediaItemID,
                 posterAssetID: posterAssetID
             )
+        }
+    }
+
+    public func searchSubtitleCandidates() {
+        guard let subtitleActions, let currentItemID else {
+            subtitleActionStatus = .error(subtitleUnavailableMessage)
+            return
+        }
+
+        guard let mediaFileID = subtitleTargetMediaFileID() else {
+            subtitleActionStatus = .error(subtitlePlayableFileRequiredMessage)
+            return
+        }
+
+        subtitleActionStatus = .loading("Searching subtitles...")
+        subtitleCandidates = []
+        isSearchingSubtitleCandidates = true
+
+        Task {
+            do {
+                let candidates = try await subtitleActions.searchSubtitles(
+                    mediaItemID: currentItemID,
+                    mediaFileID: mediaFileID,
+                    languageCode: nil
+                )
+                subtitleCandidates = candidates
+                subtitleActionStatus = .success(
+                    candidates.isEmpty
+                        ? "No subtitles found."
+                        : "\(candidates.count) subtitle candidates found."
+                )
+            } catch {
+                subtitleCandidates = []
+                subtitleActionStatus = .error(actionErrorMessage(error))
+            }
+            isSearchingSubtitleCandidates = false
+        }
+    }
+
+    public func downloadSubtitle(resultID: String) {
+        guard let subtitleActions, let currentItemID else {
+            subtitleActionStatus = .error(subtitleUnavailableMessage)
+            return
+        }
+
+        guard let mediaFileID = subtitleTargetMediaFileID() else {
+            subtitleActionStatus = .error(subtitlePlayableFileRequiredMessage)
+            return
+        }
+
+        downloadingSubtitleResultID = resultID
+        subtitleActionStatus = .loading("Downloading subtitle...")
+
+        Task {
+            do {
+                let result = try await subtitleActions.downloadSubtitle(
+                    mediaItemID: currentItemID,
+                    mediaFileID: mediaFileID,
+                    resultID: resultID
+                )
+                installedSubtitleResultIDs.insert(result.resultID)
+                subtitleActionStatus = .success(result.message)
+            } catch {
+                subtitleActionStatus = .error(actionErrorMessage(error))
+            }
+            downloadingSubtitleResultID = nil
         }
     }
 
@@ -369,6 +463,14 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         metadataActionsUnavailableMessage ?? "Metadata actions are unavailable."
     }
 
+    private var subtitleUnavailableMessage: String {
+        subtitleActionsUnavailableMessage ?? "Subtitle search is unavailable."
+    }
+
+    private var subtitlePlayableFileRequiredMessage: String {
+        "A playable local file is required before subtitles can be downloaded."
+    }
+
     private func runMetadataMutation(
         loadingMessage: String,
         operation: @escaping (
@@ -395,8 +497,32 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         }
     }
 
+    private func resetSubtitleActionState() {
+        subtitleActionStatus = .idle
+        subtitleCandidates = []
+        isSearchingSubtitleCandidates = false
+        downloadingSubtitleResultID = nil
+        installedSubtitleResultIDs = []
+    }
+
+    private func subtitleTargetMediaFileID() -> MediaFileID? {
+        guard let detail else {
+            return nil
+        }
+
+        if let activeMediaFileID = playbackStatus.mediaFileID,
+           detail.files.contains(where: { $0.mediaFileID == activeMediaFileID && $0.isPlayable }) {
+            return activeMediaFileID
+        }
+
+        return detail.files.first(where: \.isPlayable)?.mediaFileID
+    }
+
     private func actionErrorMessage(_ error: Error) -> String {
         if let actionError = error as? LibraryMetadataActionError {
+            return actionError.message
+        }
+        if let actionError = error as? LibrarySubtitleActionError {
             return actionError.message
         }
         return error.localizedDescription
@@ -410,6 +536,7 @@ public struct LibraryItemDetailView: View {
     @State private var isScrubbing = false
     @State private var scrubPositionMS: Double = 0
     @State private var isRematchSheetPresented = false
+    @State private var isSubtitleSearchSheetPresented = false
     @State private var titleOverrideText = ""
     @State private var summaryOverrideText = ""
     @State private var languageOverrideText = ""
@@ -442,6 +569,9 @@ public struct LibraryItemDetailView: View {
         }
         .sheet(isPresented: $isRematchSheetPresented) {
             metadataCandidateSheet
+        }
+        .sheet(isPresented: $isSubtitleSearchSheetPresented) {
+            subtitleCandidateSheet
         }
     }
 
@@ -492,6 +622,8 @@ public struct LibraryItemDetailView: View {
                         filesBlock(detail.files)
                     }
 
+                    subtitleActionsBlock
+
                     metadataActionsBlock(detail)
                 }
                 .padding(20)
@@ -514,6 +646,84 @@ public struct LibraryItemDetailView: View {
             endPoint: .bottomTrailing
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var subtitleActionsBlock: some View {
+        LiquidGlassCard {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 14) {
+                    if viewModel.subtitleActionsAvailable {
+                        subtitleActionButtons
+                        subtitleActionStatusView
+                    } else {
+                        subtitleUnavailableCallout
+                    }
+                }
+                .padding(.top, 10)
+            } label: {
+                Label("Advanced Subtitles", systemImage: "captions.bubble")
+                    .cinemindSectionTitleStyle()
+            }
+        }
+    }
+
+    private var subtitleActionButtons: some View {
+        HStack(spacing: 8) {
+            Button {
+                isSubtitleSearchSheetPresented = true
+                viewModel.searchSubtitleCandidates()
+            } label: {
+                Label("Search Online", systemImage: "magnifyingglass")
+            }
+            .buttonStyle(.liquidGlass)
+            .disabled(!viewModel.subtitleTargetAvailable)
+
+            if !viewModel.subtitleTargetAvailable {
+                Text("A playable local file is required.")
+                    .font(.caption)
+                    .cinemindSecondaryTextStyle(opacity: 0.72)
+            }
+
+            Spacer()
+        }
+        .controlSize(.small)
+    }
+
+    private var subtitleUnavailableCallout: some View {
+        Label(
+            viewModel.subtitleActionsUnavailableMessage
+                ?? "Subtitle search is not configured. Local and embedded subtitles are still available.",
+            systemImage: "exclamationmark.circle"
+        )
+        .font(.callout)
+        .cinemindSecondaryTextStyle(opacity: 0.76)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .liquidGlassSurface(cornerRadius: 12, material: .ultraThinMaterial)
+    }
+
+    @ViewBuilder
+    private var subtitleActionStatusView: some View {
+        switch viewModel.subtitleActionStatus {
+        case .idle:
+            EmptyView()
+        case .loading(let message):
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(message)
+                    .foregroundColor(.secondary)
+            }
+            .font(.callout)
+        case .success(let message):
+            Label(message, systemImage: "checkmark.circle")
+                .font(.callout)
+                .foregroundColor(.green)
+        case .error(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.callout)
+                .foregroundColor(.red)
+        }
     }
 
     private func metadataActionsBlock(_ detail: LibraryItemDetailShell) -> some View {
@@ -696,6 +906,76 @@ public struct LibraryItemDetailView: View {
         }
         .padding()
         .frame(minWidth: 460, minHeight: 320)
+    }
+
+    private var subtitleCandidateSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Subtitle Results")
+                    .font(.headline)
+                Spacer()
+                Button("Done") {
+                    isSubtitleSearchSheetPresented = false
+                }
+            }
+
+            subtitleActionStatusView
+
+            if viewModel.isSearchingSubtitleCandidates {
+                ProgressView("Searching...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.subtitleCandidates.isEmpty {
+                Text("No subtitles found")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(viewModel.subtitleCandidates) { candidate in
+                    subtitleCandidateRow(candidate)
+                }
+            }
+        }
+        .padding()
+        .frame(minWidth: 520, minHeight: 340)
+    }
+
+    private func subtitleCandidateRow(_ candidate: LibrarySubtitleCandidate) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(candidate.title)
+                    .font(.headline)
+                HStack(spacing: 8) {
+                    Text(candidate.languageLabel)
+                    Text(candidate.formatLabel)
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+                if let reason = candidate.unavailableReason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+            let isInstalled = viewModel.installedSubtitleResultIDs.contains(candidate.resultID)
+            Button {
+                viewModel.downloadSubtitle(resultID: candidate.resultID)
+            } label: {
+                if viewModel.downloadingSubtitleResultID == candidate.resultID {
+                    Label("Downloading", systemImage: "arrow.down.circle")
+                } else if isInstalled {
+                    Label("Installed", systemImage: "checkmark.circle")
+                } else {
+                    Label("Download", systemImage: "arrow.down.circle")
+                }
+            }
+            .controlSize(.small)
+            .disabled(
+                !candidate.isDownloadable
+                    || isInstalled
+                    || viewModel.downloadingSubtitleResultID != nil
+            )
+        }
+        .padding(.vertical, 4)
     }
 
     private func metadataCandidateRow(_ candidate: LibraryMetadataCandidate) -> some View {

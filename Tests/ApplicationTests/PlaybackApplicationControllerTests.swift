@@ -871,6 +871,128 @@ final class PlaybackApplicationControllerTests: XCTestCase {
         )
     }
 
+    func testReloadExternalSubtitleOptionsAddsDownloadedTrackForActiveMediaFile() async throws {
+        let file = try makeApplicationPlayableFile("external-subtitle-refresh")
+        let existing = playbackSubtitleAsset(
+            id: "external-en",
+            format: .srt,
+            displayName: "English",
+            relativePath: "external-subtitle-refresh.en.srt"
+        )
+        let downloaded = playbackSubtitleAsset(
+            id: "downloaded-zh",
+            format: .webVTT,
+            displayName: "Chinese",
+            relativePath: ".cinemind/subtitles/external-subtitle-refresh/zh.vtt"
+        )
+        let fixture = makeFixture(
+            files: [file],
+            subtitleAssets: [file.mediaFileID: [existing]]
+        )
+        var statuses = fixture.controller.statusStream.makeAsyncIterator()
+
+        await fixture.controller.open(mediaFileID: file.mediaFileID)
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .loading,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: existing.trackID,
+                        displayLabel: "English",
+                        isDefault: false,
+                        isSelected: false,
+                        source: .external,
+                        isSelectable: true
+                    )
+                ]
+            ),
+            statuses: &statuses
+        )
+
+        fixture.backend.emit(.stateChanged(.ready))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .ready,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: existing.trackID,
+                        displayLabel: "English",
+                        isDefault: false,
+                        isSelected: false,
+                        source: .external,
+                        isSelectable: true
+                    )
+                ]
+            ),
+            statuses: &statuses
+        )
+        await fixture.backend.waitForCommandCount(2)
+
+        fixture.backend.emit(.stateChanged(.playing))
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: existing.trackID,
+                        displayLabel: "English",
+                        isDefault: false,
+                        isSelected: false,
+                        source: .external,
+                        isSelectable: true
+                    )
+                ]
+            ),
+            statuses: &statuses
+        )
+
+        fixture.subtitleAssetReader.setAssets([
+            file.mediaFileID: [existing, downloaded]
+        ])
+        await fixture.controller.reloadExternalSubtitleOptions(mediaFileID: file.mediaFileID)
+
+        try await assertNextStatus(
+            PlaybackApplicationStatus(
+                state: .playing,
+                mediaFileID: file.mediaFileID,
+                displayName: file.displayName,
+                positionMS: 0,
+                durationMS: nil,
+                subtitleTracks: [
+                    PlaybackApplicationTrack(
+                        id: existing.trackID,
+                        displayLabel: "English",
+                        isDefault: false,
+                        isSelected: false,
+                        source: .external,
+                        isSelectable: true
+                    ),
+                    PlaybackApplicationTrack(
+                        id: downloaded.trackID,
+                        displayLabel: "Chinese",
+                        isDefault: false,
+                        isSelected: false,
+                        source: .external,
+                        isSelectable: true
+                    )
+                ]
+            ),
+            statuses: &statuses
+        )
+    }
+
     func testExternalSubtitleSelectionParsesCuesAndDoesNotForwardTrackCommand() async throws {
         let file = try makeApplicationPlayableFile("external-subtitle-selection")
         let asset = playbackSubtitleAsset(
@@ -1317,7 +1439,7 @@ final class PlaybackApplicationControllerTests: XCTestCase {
             now: { Date(timeIntervalSince1970: 1_000) }
         )
         let mediaOpening = FakeMediaOpening(files: files, error: openingError)
-        let subtitleAssetReader = subtitleAssets.isEmpty ? nil : FakeSubtitleAssetReader(assets: subtitleAssets)
+        let subtitleAssetReader = FakeSubtitleAssetReader(assets: subtitleAssets)
         let subtitleFileLoader = FakeSubtitleFileLoader(textsByPath: subtitleTexts)
         let controller = PlaybackApplicationController(
             coordinator: coordinator,
@@ -1330,7 +1452,8 @@ final class PlaybackApplicationControllerTests: XCTestCase {
             controller: controller,
             backend: backend,
             mediaOpening: mediaOpening,
-            progressStore: progressStore
+            progressStore: progressStore,
+            subtitleAssetReader: subtitleAssetReader
         )
     }
 
@@ -1441,6 +1564,7 @@ private struct ControllerFixture {
     let backend: FakePlaybackBackend
     let mediaOpening: FakeMediaOpening
     let progressStore: RecordingProgressStore
+    let subtitleAssetReader: FakeSubtitleAssetReader
 }
 
 private enum PlaybackApplicationControllerTestError: Error {
@@ -1509,14 +1633,29 @@ private final class FakeMediaOpening: MediaOpening, @unchecked Sendable {
 }
 
 private final class FakeSubtitleAssetReader: PlaybackSubtitleAssetReading, @unchecked Sendable {
-    private let assets: [MediaFileID: [PlaybackSubtitleAsset]]
+    private let lock = NSLock()
+    private var assets: [MediaFileID: [PlaybackSubtitleAsset]]
 
     init(assets: [MediaFileID: [PlaybackSubtitleAsset]]) {
         self.assets = assets
     }
 
     func fetchPlaybackSubtitleAssets(mediaFileID: MediaFileID) throws -> [PlaybackSubtitleAsset] {
-        assets[mediaFileID] ?? []
+        withLock {
+            assets[mediaFileID] ?? []
+        }
+    }
+
+    func setAssets(_ assets: [MediaFileID: [PlaybackSubtitleAsset]]) {
+        withLock {
+            self.assets = assets
+        }
+    }
+
+    private func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
     }
 }
 

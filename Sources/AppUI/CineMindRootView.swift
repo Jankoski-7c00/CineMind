@@ -82,7 +82,9 @@ fileprivate struct ReadyShellView: View {
             detailBrowser: environment.itemDetailBrowser,
             playbackController: environment.playbackController,
             metadataActions: environment.metadataActions,
-            metadataActionsUnavailableMessage: environment.metadataActionsUnavailableMessage
+            metadataActionsUnavailableMessage: environment.metadataActionsUnavailableMessage,
+            subtitleActions: environment.subtitleActions,
+            subtitleActionsUnavailableMessage: environment.subtitleActionsUnavailableMessage
         )
         _browserViewModel = StateObject(wrappedValue:
             LibraryBrowserViewModel(

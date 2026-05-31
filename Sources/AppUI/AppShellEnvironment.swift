@@ -10,6 +10,8 @@ public struct AppShellEnvironment {
     public let playbackController: (any PlaybackApplicationControlling)?
     public let metadataActions: (any LibraryMetadataActionHandling)?
     public let metadataActionsUnavailableMessage: String?
+    public let subtitleActions: (any LibrarySubtitleActionHandling)?
+    public let subtitleActionsUnavailableMessage: String?
 
     public init(
         mediaSummaryBrowser: any LibraryMediaSummaryBrowsing,
@@ -20,7 +22,9 @@ public struct AppShellEnvironment {
         libraryScanner: any LibraryScanning,
         playbackController: (any PlaybackApplicationControlling)? = nil,
         metadataActions: (any LibraryMetadataActionHandling)? = nil,
-        metadataActionsUnavailableMessage: String? = nil
+        metadataActionsUnavailableMessage: String? = nil,
+        subtitleActions: (any LibrarySubtitleActionHandling)? = nil,
+        subtitleActionsUnavailableMessage: String? = nil
     ) {
         self.mediaSummaryBrowser = mediaSummaryBrowser
         self.itemDetailBrowser = itemDetailBrowser
@@ -31,5 +35,7 @@ public struct AppShellEnvironment {
         self.playbackController = playbackController
         self.metadataActions = metadataActions
         self.metadataActionsUnavailableMessage = metadataActionsUnavailableMessage
+        self.subtitleActions = subtitleActions
+        self.subtitleActionsUnavailableMessage = subtitleActionsUnavailableMessage
     }
 }

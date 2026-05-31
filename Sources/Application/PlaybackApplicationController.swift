@@ -93,7 +93,7 @@ public protocol PlaybackApplicationControlling: Sendable {
     func shutdown() async
 }
 
-public actor PlaybackApplicationController: PlaybackApplicationControlling {
+public actor PlaybackApplicationController: PlaybackApplicationControlling, PlaybackExternalSubtitleRefreshing {
     public nonisolated let statusStream: AsyncStream<PlaybackApplicationStatus>
 
     private let coordinator: PlaybackCoordinator
@@ -309,6 +309,37 @@ public actor PlaybackApplicationController: PlaybackApplicationControlling {
         currentExternalSubtitleTracks = tracksByDeselecting(currentExternalSubtitleTracks)
         activeExternalSubtitleTimeline = nil
         activeSubtitleText = nil
+        emitCurrentStatus()
+    }
+
+    public func reloadExternalSubtitleOptions(mediaFileID: MediaFileID) async {
+        startEventLoopIfNeeded()
+
+        guard activeMediaFileID == mediaFileID else {
+            return
+        }
+
+        let selectedExternalTrackID = currentExternalSubtitleTracks
+            .first(where: \.isSelected)?
+            .id
+        loadExternalSubtitleOptions(mediaFileID: mediaFileID)
+
+        if let selectedExternalTrackID,
+           let selectedAsset = externalSubtitleAssetsByTrackID[selectedExternalTrackID],
+           selectedAsset.isSelectable,
+           let timeline = externalSubtitleTimeline(for: selectedAsset) {
+            currentExternalSubtitleTracks = tracksBySelecting(
+                selectedExternalTrackID,
+                in: currentExternalSubtitleTracks
+            )
+            activeExternalSubtitleTimeline = timeline
+            updateActiveSubtitleText()
+        } else if selectedExternalTrackID != nil {
+            currentExternalSubtitleTracks = tracksByDeselecting(currentExternalSubtitleTracks)
+            activeExternalSubtitleTimeline = nil
+            activeSubtitleText = nil
+        }
+
         emitCurrentStatus()
     }
 

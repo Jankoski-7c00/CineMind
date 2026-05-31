@@ -59,6 +59,10 @@ enum CineMindAppEnvironmentFactory {
             store: store,
             appDirectoryURL: appDirectoryURL
         )
+        let subtitleActionConfiguration = makeSubtitleActions(
+            store: store,
+            playbackSubtitleRefresher: playbackRuntime?.controller
+        )
         let appShellEnvironment = AppShellEnvironment(
             mediaSummaryBrowser: mediaSummaryBrowser,
             itemDetailBrowser: itemDetailBrowser,
@@ -68,7 +72,9 @@ enum CineMindAppEnvironmentFactory {
             libraryScanner: libraryScanner,
             playbackController: playbackRuntime?.controller,
             metadataActions: metadataActionConfiguration.actions,
-            metadataActionsUnavailableMessage: metadataActionConfiguration.unavailableMessage
+            metadataActionsUnavailableMessage: metadataActionConfiguration.unavailableMessage,
+            subtitleActions: subtitleActionConfiguration.actions,
+            subtitleActionsUnavailableMessage: subtitleActionConfiguration.unavailableMessage
         )
 
         return CineMindAppStartupEnvironment(
@@ -146,6 +152,18 @@ enum CineMindAppEnvironmentFactory {
         )
     }
 
+    private static func makeSubtitleActions(
+        store: CineMindStore,
+        playbackSubtitleRefresher: (any PlaybackExternalSubtitleRefreshing)?
+    ) -> SubtitleActionConfiguration {
+        _ = store
+        _ = playbackSubtitleRefresher
+        return SubtitleActionConfiguration(
+            actions: nil,
+            unavailableMessage: "Subtitle search is not configured. Local and embedded subtitles are still available."
+        )
+    }
+
     private static func appDirectoryURL() throws -> URL {
         let fileManager = FileManager.default
         guard let applicationSupportURL = fileManager.urls(
@@ -202,6 +220,11 @@ enum CineMindAppEnvironmentFactory {
 
 private struct MetadataActionConfiguration {
     let actions: (any LibraryMetadataActionHandling)?
+    let unavailableMessage: String?
+}
+
+private struct SubtitleActionConfiguration {
+    let actions: (any LibrarySubtitleActionHandling)?
     let unavailableMessage: String?
 }
 

@@ -16,6 +16,22 @@ final class SubtitleTests: XCTestCase {
         XCTAssertFalse(SubtitleFormat.ssa.supportsExternalCueParsing)
     }
 
+    func testSubtitleDownloadResultCarriesProviderPayloadWithoutPersistenceAsset() {
+        let result = SubtitleDownloadResult(
+            resultID: "provider-result-1",
+            suggestedFileName: "Arrival.en.srt",
+            languageCode: "en",
+            format: .srt,
+            content: "1\n00:00:00,000 --> 00:00:01,000\nHello"
+        )
+
+        XCTAssertEqual(result.resultID, "provider-result-1")
+        XCTAssertEqual(result.suggestedFileName, "Arrival.en.srt")
+        XCTAssertEqual(result.languageCode, "en")
+        XCTAssertEqual(result.format, .srt)
+        XCTAssertTrue(result.content.contains("Hello"))
+    }
+
     func testSRTParserBuildsTimelineAndActiveCueText() throws {
         let timeline = try SubtitleParser.parse(
             """
