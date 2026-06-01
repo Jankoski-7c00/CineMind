@@ -72,7 +72,7 @@ public struct MetadataCandidateRankingPolicy: Equatable, Sendable {
             originalTitle: candidate.originalTitle
         )
         let yearMatch = Self.yearAlignment(queryYear: query.year, candidateYear: candidate.year)
-        let finalScore = min(0.98, titleScore * 0.78 + yearMatch * 0.22)
+        let finalScore = min(0.98, titleScore.value * 0.78 + yearMatch * 0.22)
 
         return MetadataCandidateConfidence(
             titleScore: titleScore,
@@ -105,7 +105,7 @@ public struct MetadataCandidateRankingPolicy: Equatable, Sendable {
             displayTitle: candidate.displayTitle,
             originalTitle: candidate.originalTitle
         )
-        let finalScore = min(0.96, titleScore * 0.80 + 0.20)
+        let finalScore = min(0.96, titleScore.value * 0.80 + 0.20)
 
         return MetadataCandidateConfidence(
             titleScore: titleScore,
@@ -183,7 +183,7 @@ public struct MetadataAutoMatchPolicy: Equatable, Sendable {
 }
 
 private struct MetadataCandidateConfidence {
-    var titleScore: Double
+    var titleScore: MetadataTitleScore
     var yearMatch: Double
     var mediaTypeMatches: Bool
     var episodeExists: Bool
@@ -191,7 +191,10 @@ private struct MetadataCandidateConfidence {
 
     var inputs: [String: String] {
         [
-            "title_score": "\(titleScore)",
+            "title_score": "\(titleScore.value)",
+            "title_overlap_score": "\(titleScore.overlapScore)",
+            "title_containment_score": "\(titleScore.containmentScore)",
+            "title_score_strategy": titleScore.strategy,
             "year_match": "\(yearMatch)",
             "media_type_match": "\(mediaTypeMatches)",
             "episode_exists": "\(episodeExists)",
@@ -201,7 +204,7 @@ private struct MetadataCandidateConfidence {
 
     static func zero(mediaTypeMatches: Bool) -> MetadataCandidateConfidence {
         MetadataCandidateConfidence(
-            titleScore: 0.0,
+            titleScore: .zero,
             yearMatch: 0.0,
             mediaTypeMatches: mediaTypeMatches,
             episodeExists: false,
@@ -210,32 +213,76 @@ private struct MetadataCandidateConfidence {
     }
 }
 
+private struct MetadataTitleScore {
+    var value: Double
+    var overlapScore: Double
+    var containmentScore: Double
+    var strategy: String
+
+    static let zero = MetadataTitleScore(
+        value: 0.0,
+        overlapScore: 0.0,
+        containmentScore: 0.0,
+        strategy: "none"
+    )
+}
+
 private enum MetadataTitleSimilarity {
-    static func score(queryTitle: String, displayTitle: String, originalTitle: String?) -> Double {
-        max(
-            score(queryTitle, displayTitle),
-            score(queryTitle, originalTitle ?? "")
-        )
+    private static let weakStopwords: Set<String> = ["the", "a", "an"]
+
+    static func score(queryTitle: String, displayTitle: String, originalTitle: String?) -> MetadataTitleScore {
+        let displayScore = score(queryTitle, displayTitle)
+        guard let originalTitle, !originalTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return displayScore
+        }
+
+        let originalScore = score(queryTitle, originalTitle)
+        return originalScore.value > displayScore.value ? originalScore : displayScore
     }
 
-    private static func score(_ lhs: String, _ rhs: String) -> Double {
+    private static func score(_ lhs: String, _ rhs: String) -> MetadataTitleScore {
         let left = normalize(lhs)
         let right = normalize(rhs)
         guard !left.isEmpty, !right.isEmpty else {
-            return 0.0
-        }
-        guard left != right else {
-            return 1.0
+            return .zero
         }
 
-        let leftTokens = Set(left.split(separator: " ").map(String.init))
-        let rightTokens = Set(right.split(separator: " ").map(String.init))
+        let leftTokenList = tokens(left)
+        let rightTokenList = tokens(right)
+        let leftTokens = Set(leftTokenList)
+        let rightTokens = Set(rightTokenList)
         let denominator = max(leftTokens.count, rightTokens.count)
         guard denominator > 0 else {
-            return 0.0
+            return .zero
         }
 
-        return Double(leftTokens.intersection(rightTokens).count) / Double(denominator)
+        let overlapScore = Double(leftTokens.intersection(rightTokens).count) / Double(denominator)
+        let containmentScore = orderedContainmentScore(leftTokenList, rightTokenList)
+
+        if left == right {
+            return MetadataTitleScore(
+                value: 1.0,
+                overlapScore: overlapScore,
+                containmentScore: containmentScore,
+                strategy: "exact"
+            )
+        }
+
+        if containmentScore > overlapScore {
+            return MetadataTitleScore(
+                value: containmentScore,
+                overlapScore: overlapScore,
+                containmentScore: containmentScore,
+                strategy: "containment"
+            )
+        }
+
+        return MetadataTitleScore(
+            value: overlapScore,
+            overlapScore: overlapScore,
+            containmentScore: containmentScore,
+            strategy: "overlap"
+        )
     }
 
     private static func normalize(_ value: String) -> String {
@@ -254,5 +301,50 @@ private enum MetadataTitleSimilarity {
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+    }
+
+    private static func tokens(_ value: String) -> [String] {
+        value.split(separator: " ").map(String.init)
+    }
+
+    private static func orderedContainmentScore(_ lhs: [String], _ rhs: [String]) -> Double {
+        let left = contentTokens(lhs)
+        let right = contentTokens(rhs)
+        let shorter: [String]
+        let longer: [String]
+
+        if left.count <= right.count {
+            shorter = left
+            longer = right
+        } else {
+            shorter = right
+            longer = left
+        }
+
+        guard shorter.count >= 3 else {
+            return 0.0
+        }
+
+        let extraTokenCount = longer.count - shorter.count
+        guard extraTokenCount <= 2,
+              containsOrderedSubsequence(shorter, in: longer) else {
+            return 0.0
+        }
+
+        return max(0.0, 1.0 - 0.05 * Double(extraTokenCount))
+    }
+
+    private static func contentTokens(_ tokens: [String]) -> [String] {
+        tokens.filter { !weakStopwords.contains($0) }
+    }
+
+    private static func containsOrderedSubsequence(_ subsequence: [String], in tokens: [String]) -> Bool {
+        var currentIndex = 0
+        for token in tokens where currentIndex < subsequence.count {
+            if token == subsequence[currentIndex] {
+                currentIndex += 1
+            }
+        }
+        return currentIndex == subsequence.count
     }
 }

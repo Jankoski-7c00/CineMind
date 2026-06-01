@@ -16,33 +16,65 @@ struct PosterPlaceholderView: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "film")
-                .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.72))
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.08),
+                    Color(red: 0.08, green: 0.10, blue: 0.14).opacity(0.68),
+                    Color.black.opacity(0.42)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
 
-            Text(title)
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.88))
-                .multilineTextAlignment(.center)
+            RadialGradient(
+                colors: [
+                    Color.accentColor.opacity(0.20),
+                    .clear
+                ],
+                center: .topLeading,
+                startRadius: 8,
+                endRadius: 150
+            )
 
-            if let subtitle, !subtitle.isEmpty {
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.56))
-                    .lineLimit(2)
+            VStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .frame(width: 62, height: 48)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+                        }
+
+                    Image(systemName: "film")
+                        .font(.system(size: 29, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.68))
+                }
+
+                Text(title)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.70))
                     .multilineTextAlignment(.center)
-            }
 
-            if isLoading {
-                ProgressView()
-                    .controlSize(.small)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.54))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                }
+
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
             }
+            .padding(18)
         }
-        .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .liquidGlassSurface(
-            cornerRadius: 14,
+            cornerRadius: 16,
             material: .ultraThinMaterial,
             tint: .black
         )

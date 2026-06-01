@@ -59,6 +59,35 @@ final class MetadataCandidateRankingPolicyTests: XCTestCase {
         XCTAssertEqual(confidenceInput(penalized, "year_match"), 0.0, accuracy: 0.000_001)
     }
 
+    func testMovieTitleContainmentHandlesHighConfidenceAliasWithoutYear() {
+        let query = MetadataSearchQuery.movie(title: "The Million Pound Bank Note")
+        let candidate = movieCandidate(id: 34000, title: "The Million Pound Note")
+        let distractor = movieCandidate(id: 2, title: "Million Dollar Baby")
+
+        let ranked = policy.rankMovieCandidates(for: query, candidates: [distractor, candidate])
+
+        XCTAssertEqual(ranked.first?.identifier, candidate.identifier)
+        XCTAssertGreaterThanOrEqual(ranked[0].confidence, 0.85)
+        XCTAssertEqual(ranked[0].confidence, 0.851, accuracy: 0.000_001)
+        XCTAssertEqual(confidenceInput(ranked[0], "title_score"), 0.95, accuracy: 0.000_001)
+        XCTAssertEqual(confidenceInput(ranked[0], "title_overlap_score"), 0.8, accuracy: 0.000_001)
+        XCTAssertEqual(confidenceInput(ranked[0], "title_containment_score"), 0.95, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[0].confidenceInputs["title_score_strategy"], "containment")
+        XCTAssertEqual(MetadataAutoMatchPolicy().decision(for: [ranked[0]]), .matched(ranked[0]))
+    }
+
+    func testShortTitleContainmentDoesNotAutoMatch() {
+        let query = MetadataSearchQuery.movie(title: "The Thing From Another World")
+        let candidate = movieCandidate(id: 1, title: "The Thing")
+
+        let ranked = policy.rankMovieCandidates(for: query, candidates: [candidate])
+
+        XCTAssertLessThan(ranked[0].confidence, 0.85)
+        XCTAssertEqual(confidenceInput(ranked[0], "title_containment_score"), 0.0, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[0].confidenceInputs["title_score_strategy"], "overlap")
+        XCTAssertEqual(MetadataAutoMatchPolicy().decision(for: [ranked[0]]), .lowConfidence)
+    }
+
     func testEpisodeSeriesTitleMatchRanksHigh() {
         let query = MetadataSearchQuery.episode(
             seriesTitle: "Severance",

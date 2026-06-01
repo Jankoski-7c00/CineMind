@@ -604,6 +604,7 @@ public struct LibraryItemDetailView: View {
     private func detailContent(_ detail: LibraryItemDetailShell) -> some View {
         ZStack {
             detailBackdrop
+                .allowsHitTesting(false)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -626,7 +627,9 @@ public struct LibraryItemDetailView: View {
 
                     metadataActionsBlock(detail)
                 }
-                .padding(20)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+                .safeAreaPadding(.top, 20)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .id(detail.id)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -636,15 +639,40 @@ public struct LibraryItemDetailView: View {
     }
 
     private var detailBackdrop: some View {
-        LinearGradient(
-            colors: [
-                Color.black,
-                Color(red: 0.08, green: 0.09, blue: 0.11),
-                Color.black
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color.black,
+                    Color(red: 0.06, green: 0.075, blue: 0.105),
+                    Color(red: 0.015, green: 0.018, blue: 0.026),
+                    Color.black
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            RadialGradient(
+                colors: [
+                    Color(red: 0.28, green: 0.34, blue: 0.46).opacity(0.20),
+                    .clear
+                ],
+                center: .topTrailing,
+                startRadius: 20,
+                endRadius: 460
+            )
+
+            RadialGradient(
+                colors: [
+                    Color.accentColor.opacity(0.12),
+                    .clear
+                ],
+                center: .bottomLeading,
+                startRadius: 30,
+                endRadius: 560
+            )
+
+            Color.black.opacity(0.30)
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -1356,15 +1384,41 @@ public struct LibraryItemDetailView: View {
 
     private func metadataBlock(_ metadata: LibraryMetadataDetail) -> some View {
         LiquidGlassCard("Metadata", systemImage: "tag") {
-            VStack(alignment: .leading, spacing: 8) {
-                LabeledContent("Status", value: metadataStatusLabel(metadata.statusLabel))
-                LabeledContent("Local Title", value: CineMindDisplayText.value(metadata.localTitle))
-                LabeledContent("Matched Title", value: CineMindDisplayText.value(metadata.metadataTitle))
-                LabeledContent("Original Title", value: CineMindDisplayText.value(metadata.originalTitle))
-                LabeledContent("Summary", value: CineMindDisplayText.summary(metadata.summary))
-                LabeledContent("Language", value: CineMindDisplayText.value(metadata.languageLabel))
-                LabeledContent("Release Date", value: CineMindDisplayText.value(metadata.releaseOrAirDateLabel))
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 12) {
+                    Text("Match Status")
+                        .font(.callout.weight(.medium))
+                        .cinemindSecondaryTextStyle(opacity: 0.70)
+                    Spacer()
+                    metadataStatusBadge(metadata.statusLabel)
+                }
+
+                Divider()
+                    .opacity(0.35)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    metadataFieldRow("Local Title", value: CineMindDisplayText.value(metadata.localTitle))
+                    metadataFieldRow("Matched Title", value: CineMindDisplayText.value(metadata.metadataTitle))
+                    metadataFieldRow("Original Title", value: CineMindDisplayText.value(metadata.originalTitle))
+                    metadataFieldRow("Language", value: CineMindDisplayText.value(metadata.languageLabel))
+                    metadataFieldRow("Release Date", value: CineMindDisplayText.value(metadata.releaseOrAirDateLabel))
+                }
             }
+        }
+    }
+
+    private func metadataFieldRow(_ label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            Text(label)
+                .font(.callout.weight(.medium))
+                .cinemindSecondaryTextStyle(opacity: 0.62)
+                .frame(width: 116, alignment: .leading)
+
+            Text(value)
+                .font(.callout)
+                .foregroundStyle(.white.opacity(value == CineMindDisplayText.emptyValue ? 0.50 : 0.84))
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -1444,49 +1498,65 @@ public struct LibraryItemDetailView: View {
 
     private func filesBlock(_ files: [LibraryFileSummary]) -> some View {
         LiquidGlassCard("Files", systemImage: "doc") {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
                 ForEach(files, id: \.mediaFileID) { file in
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(file.fileName)
-                                .lineLimit(1)
-                            Text(file.fileSizeLabel)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        Text(fileAvailabilityLabel(file.availabilityLabel))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        if let reason = file.playabilityReason {
-                            Text(reason)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .help(reason)
-                        }
-                        if file.isPlayable,
-                           let resumeLabel = file.resumePositionLabel {
-                            Text("Resume from \(resumeLabel)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        if file.isPlayable {
-                            let buttonState = filePlaybackButtonState(for: file)
-                            Button {
-                                performFilePlaybackAction(
-                                    buttonState,
-                                    mediaFileID: file.mediaFileID
-                                )
-                            } label: {
-                                Label(buttonState.title, systemImage: buttonState.systemImage)
-                            }
-                            .controlSize(.small)
-                            .disabled(buttonState.isDisabled)
-                        }
+                    fileRow(file)
+
+                    if file.mediaFileID != files.last?.mediaFileID {
+                        Divider()
+                            .opacity(0.30)
                     }
                 }
             }
         }
+    }
+
+    private func fileRow(_ file: LibraryFileSummary) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text(file.fileName)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.90))
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    Text(file.fileSizeLabel)
+                    if let resumeLabel = file.resumePositionLabel, file.isPlayable {
+                        Text("·")
+                        Text("Resume from \(resumeLabel)")
+                    }
+                    if let reason = file.playabilityReason {
+                        Text("·")
+                        Text(reason)
+                            .help(reason)
+                    }
+                }
+                .font(.caption)
+                .cinemindSecondaryTextStyle(opacity: 0.62)
+                .lineLimit(1)
+            }
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 8) {
+                fileAvailabilityBadge(file.availabilityLabel)
+
+                if file.isPlayable {
+                    let buttonState = filePlaybackButtonState(for: file)
+                    Button {
+                        performFilePlaybackAction(
+                            buttonState,
+                            mediaFileID: file.mediaFileID
+                        )
+                    } label: {
+                        Label(buttonState.title, systemImage: buttonState.systemImage)
+                    }
+                    .buttonStyle(.liquidGlassPrimary)
+                    .disabled(buttonState.isDisabled)
+                }
+            }
+        }
+        .padding(.vertical, 3)
     }
 
     private func filePlaybackButtonState(
@@ -1593,30 +1663,64 @@ public struct LibraryItemDetailView: View {
         CineMindDisplayText.value(value)
     }
 
-    private func fileAvailabilityLabel(_ value: String) -> String {
+    private func fileAvailabilityBadge(_ value: String) -> some View {
+        let descriptor = fileAvailabilityDescriptor(value)
+        return LiquidGlassBadge(
+            descriptor.title,
+            systemImage: descriptor.systemImage,
+            variant: descriptor.variant
+        )
+    }
+
+    private func metadataStatusBadge(_ value: String) -> some View {
+        let descriptor = metadataStatusDescriptor(value)
+        return LiquidGlassBadge(
+            descriptor.title,
+            systemImage: descriptor.systemImage,
+            variant: descriptor.variant
+        )
+    }
+
+    private func fileAvailabilityDescriptor(_ value: String) -> DetailBadgeDescriptor {
         switch value.lowercased() {
         case "available":
-            "Available"
-        case "unavailable":
-            "Missing File"
+            DetailBadgeDescriptor(title: "Available", systemImage: "checkmark.circle.fill", variant: .success)
+        case "unavailable", "no files":
+            DetailBadgeDescriptor(title: "Missing File", systemImage: "xmark.circle.fill", variant: .danger)
         case "folder unavailable":
-            "Folder Missing"
+            DetailBadgeDescriptor(title: "Folder Missing", systemImage: "folder.badge.questionmark", variant: .warning)
+        case "partially available":
+            DetailBadgeDescriptor(title: "Partial", systemImage: "exclamationmark.circle.fill", variant: .warning)
         default:
-            CineMindDisplayText.friendlyStatus(value)
+            DetailBadgeDescriptor(
+                title: CineMindDisplayText.friendlyStatus(value),
+                systemImage: "info.circle",
+                variant: .neutral
+            )
         }
     }
 
-    private func metadataStatusLabel(_ value: String) -> String {
+    private func metadataStatusDescriptor(_ value: String) -> DetailBadgeDescriptor {
         switch value.lowercased() {
         case "complete":
-            "Matched"
+            DetailBadgeDescriptor(title: "Matched", systemImage: "checkmark.seal.fill", variant: .success)
         case "partial":
-            "Partial"
+            DetailBadgeDescriptor(title: "Partial", systemImage: "exclamationmark.circle.fill", variant: .warning)
         case "missing":
-            "Needs Metadata"
+            DetailBadgeDescriptor(title: "Needs Metadata", systemImage: "tag.fill", variant: .accent)
         default:
-            CineMindDisplayText.friendlyStatus(value)
+            DetailBadgeDescriptor(
+                title: CineMindDisplayText.friendlyStatus(value),
+                systemImage: "tag",
+                variant: .neutral
+            )
         }
+    }
+
+    private struct DetailBadgeDescriptor {
+        let title: String
+        let systemImage: String
+        let variant: LiquidGlassBadge.Variant
     }
 
     private func posterAssetStatusLabel(_ value: String) -> String {

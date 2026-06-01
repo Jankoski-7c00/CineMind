@@ -14,15 +14,36 @@ public struct LibraryBrowserView: View {
             workflowHeader
             browserContent
         }
-        .background(Color.black.opacity(0.94))
+        .background {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.035, green: 0.04, blue: 0.052),
+                    Color.black.opacity(0.96)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
         .task(id: viewModel.selectedSection) {
             await viewModel.load()
         }
     }
 
     private var workflowHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Library")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.94))
+
+                    Text(browserSubtitle)
+                        .font(.callout)
+                        .cinemindSecondaryTextStyle(opacity: 0.62)
+                }
+
+                Spacer()
+
                 LiquidGlassPanel(
                     cornerRadius: 18,
                     material: .thinMaterial,
@@ -48,8 +69,6 @@ public struct LibraryBrowserView: View {
                         workflowProgressLabel
                     }
                 }
-
-                Spacer()
             }
 
             if let workflowErrorMessage = viewModel.workflowErrorMessage {
@@ -66,13 +85,38 @@ public struct LibraryBrowserView: View {
                 scanResultSummary(lastScanResult)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 18)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+        .background {
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.045),
+                    Color.clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
     }
 
     private var workflowIsBusy: Bool {
         viewModel.isAddingFolder || viewModel.isScanning
+    }
+
+    private var browserSubtitle: String {
+        if viewModel.selectedSection == .folders {
+            if let count = viewModel.folderSnapshot?.folders.count {
+                return count == 1 ? "1 folder" : "\(count) folders"
+            }
+            return "Local folders"
+        }
+
+        if let count = viewModel.snapshot?.items.count {
+            return count == 1 ? "1 item" : "\(count) items"
+        }
+
+        return "Local library"
     }
 
     @ViewBuilder
@@ -168,19 +212,16 @@ public struct LibraryBrowserView: View {
                     color: .secondary
                 )
             }
-            TableColumn("Year / Episode") { item in
-                Text(item.yearOrEpisodeLabel ?? CineMindDisplayText.emptyValue)
-            }
-            TableColumn("Availability") { item in
-                let descriptor = availabilityDescriptor(item.availabilityLabel)
+            TableColumn("Metadata") { item in
+                let descriptor = metadataDescriptor(item.metadataLabel)
                 tableStatusLabel(
                     descriptor.title,
                     systemImage: descriptor.systemImage,
                     color: descriptor.color
                 )
             }
-            TableColumn("Metadata") { item in
-                let descriptor = metadataDescriptor(item.metadataLabel)
+            TableColumn("Availability") { item in
+                let descriptor = availabilityDescriptor(item.availabilityLabel)
                 tableStatusLabel(
                     descriptor.title,
                     systemImage: descriptor.systemImage,
@@ -198,14 +239,33 @@ public struct LibraryBrowserView: View {
     }
 
     private func mediaTitleCell(_ item: LibraryItemSummary) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 9) {
             Image(systemName: item.mediaTypeLabel == "TV Episode" ? "tv" : "film")
                 .foregroundStyle(.secondary)
+                .frame(width: 18)
 
-            Text(item.displayTitle)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.displayTitle)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+
+                Text(mediaSubtitle(for: item))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
+    }
+
+    private func mediaSubtitle(for item: LibraryItemSummary) -> String {
+        let availability = availabilityDescriptor(item.availabilityLabel).title
+        guard let yearOrEpisode = item.yearOrEpisodeLabel,
+              !yearOrEpisode.isEmpty else {
+            return "\(item.mediaTypeLabel) · \(availability)"
+        }
+
+        return "\(item.mediaTypeLabel) · \(yearOrEpisode) · \(availability)"
     }
 
     private func tableStatusLabel(

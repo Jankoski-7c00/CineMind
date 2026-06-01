@@ -11,9 +11,7 @@ struct MediaDetailHeaderView: View {
             HStack(alignment: .top, spacing: 22) {
                 posterView
 
-                VStack(alignment: .leading, spacing: 14) {
-                    badgeRow
-
+                VStack(alignment: .leading, spacing: 15) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(detail.displayTitle)
                             .cinemindDetailTitleStyle()
@@ -21,6 +19,8 @@ struct MediaDetailHeaderView: View {
 
                         subtitleLine
                     }
+
+                    badgeRow
 
                     Label(lastPlayedText, systemImage: "clock")
                         .font(.callout)

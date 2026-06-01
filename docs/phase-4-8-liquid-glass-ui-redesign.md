@@ -670,3 +670,230 @@ If a build fails:
 Window polish note:
 
 - Optional `.windowStyle(.hiddenTitleBar)` was not applied in V1. The SwiftPM product currently launches as a raw executable rather than a `.app` bundle in local smoke, so there was not enough foreground window-layout evidence to verify traffic-light safety.
+
+---
+
+## Phase 4.8H — Detail Header, Browser Semantics, and Glass Depth Polish
+
+Phase 4.8H is a low-risk polish pass on top of the completed V1 Liquid Glass refactor. It does not rewrite the app shell, browser architecture, Application protocols, playback controller, metadata actions, or persistence model.
+
+### Current Completion Snapshot
+
+Read-only inspection of the current tree shows:
+
+- `Sources/AppUI/Components/` exists and contains `LiquidGlassPanel`, `LiquidGlassCard`, `LiquidGlassBadge`, `LiquidGlassButtonStyle`, `PosterPlaceholderView`, and `MediaDetailHeaderView`.
+- `Sources/AppUI/Extensions/Typography+ViewModifiers.swift` exists and provides shared display text and typography helpers.
+- `LibraryItemDetailView` now uses a backdrop, `MediaDetailHeaderView`, primary action row, glass cards, and collapsed advanced metadata/subtitle sections.
+- `LibraryBrowserView` still uses `Table`, which is correct for V1, and already has icon/status text polish.
+- `SidebarView` uses `.listStyle(.sidebar)`.
+- Current AppUI import check is clean for the forbidden infrastructure modules listed in this document.
+
+The remaining issues are visual hierarchy, safe-area handling, and semantic polish rather than architecture gaps.
+
+### Current Problems To Address
+
+From the latest screenshot and code inspection:
+
+- Detail content may sit too close to the titlebar/safe-area top because the detail `ScrollView` relies on a generic `.padding(20)` and the background/content safe-area responsibilities are not explicit.
+- `MediaDetailHeaderView` renders `badgeRow` before the media title, which can make `Movie` or `TV Episode` feel like the primary heading.
+- `PosterPlaceholderView` uses a simple `film` symbol on a mostly empty glass surface; it has little poster-card depth and can look visually hollow.
+- `LiquidGlassPanel` has one gradient stroke and one shadow, but no inset highlight or subtle secondary glow, so larger cards can read as black rounded rectangles.
+- `detailBackdrop` is a single linear gradient from black to dark gray to black, so the detail column lacks cinematic depth.
+- The media table still includes `Year / Episode`, which often displays `—`, while metadata status and last-played semantics are not prominent enough.
+- The files card still uses one horizontal row that resembles a table tail; status, resume text, and play actions need clearer grouping.
+- The metadata card remains `LabeledContent`-heavy, uses a text status instead of a badge, and repeats summary already shown in the header.
+- The browser toolbar is a floating action capsule on a hard black background and does not say `Library` or `Local library`.
+- Sidebar selection is mostly the system gray selected state; it needs a slightly more glass-like selected row without breaking `NavigationSplitView` selection.
+
+### Implementation Scope
+
+Modify only AppUI and this document:
+
+- Detail safe-area/top clipping protection.
+- Header hierarchy: title first, badges second, last played and summary below.
+- Poster placeholder visual depth while preserving 2:3 poster ratio.
+- Static glass-depth improvements for `LiquidGlassPanel` and `LiquidGlassCard`.
+- Static cinematic detail background.
+- Files card row grouping and button styling.
+- Metadata card status badge and reduced summary duplication.
+- Lightweight media table semantic polish while keeping `Table`.
+- Browser header with `Library`, `Local library` or existing count-derived text, and Add Folder / Scan actions.
+- Sidebar selected/hover polish while keeping the existing six sidebar items.
+
+No new Application data is required for the planned V1.5 polish. If a desired label cannot be derived from the current AppUI view models and Application DTOs, keep the existing safe text or mark it deferred.
+
+### Explicitly Deferred From 4.8H
+
+Do not implement:
+
+- Grid / poster wall.
+- `Table` to `List` migration.
+- Search field functional wiring.
+- Sidebar count badges.
+- Cursor-tracking radial highlight.
+- Dynamic poster color extraction.
+- Real refraction, shader, or Canvas effect.
+- Advanced morphing glass.
+- AppKit `NSWindow` bridging.
+- Custom traffic-light layout.
+- Full-size content view.
+- Per-row continuous animation.
+- Looping glow animation.
+- Any changes in `Domain`, `Application`, `Persistence`, `Playback`, `Metadata`, `Subtitle`, or `AI`.
+
+### Expected File Modifications
+
+Allowed source files:
+
+- `Sources/AppUI/CineMindRootView.swift`
+- `Sources/AppUI/LibraryItemDetailView.swift`
+- `Sources/AppUI/LibraryBrowserView.swift`
+- `Sources/AppUI/SidebarView.swift`
+- `Sources/AppUI/Components/LiquidGlassPanel.swift`
+- `Sources/AppUI/Components/LiquidGlassCard.swift`
+- `Sources/AppUI/Components/LiquidGlassBadge.swift`
+- `Sources/AppUI/Components/LiquidGlassButtonStyle.swift`
+- `Sources/AppUI/Components/MediaDetailHeaderView.swift`
+- `Sources/AppUI/Components/PosterPlaceholderView.swift`
+- `Sources/AppUI/Extensions/Typography+ViewModifiers.swift`
+
+Allowed documentation:
+
+- `docs/phase-4-8-liquid-glass-ui-redesign.md`
+
+Forbidden source files:
+
+- `Sources/Domain/**`
+- `Sources/Application/**`
+- `Sources/Persistence/**`
+- `Sources/Playback/**`
+- `Sources/PlaybackAVFoundation/**`
+- `Sources/Metadata/**`
+- `Sources/Subtitle/**`
+- `Sources/AI/**`
+- `Package.swift`, unless a future separate task explicitly needs package-level work
+
+### Implementation Plan
+
+1. Detail safe-area and clipping pass.
+   - Inspect `CineMindRootView`, `NavigationSplitView`, and `LibraryItemDetailView.detailContent`.
+   - Make the background responsible for any safe-area ignoring, if needed.
+   - Keep foreground content inside safe area with `safeAreaPadding(.top)` or explicit top padding.
+   - Do not add AppKit bridging or titlebar customization.
+   - Run `swift build --target AppUI`.
+
+2. Header hierarchy pass.
+   - In `MediaDetailHeaderView`, move `Text(detail.displayTitle)` above badge row.
+   - Keep `Movie` / `TV Episode` as badges or secondary subtitle only.
+   - Use metadata and availability badges under the title.
+   - Keep last played as secondary text.
+   - Keep summary in the header, capped by line limit.
+   - Run `swift build --target AppUI`.
+
+3. Poster placeholder pass.
+   - Preserve 2:3 sizing at call sites.
+   - Use macOS 14-safe symbols such as `film`, `photo`, or `rectangle.stack`.
+   - Add a static diagonal/radial gradient and stronger edge highlight.
+   - Keep visible text to `No Poster` or `Loading Poster`; never show UUID, cache path, or placeholder reason.
+   - Run `swift build --target AppUI`.
+
+4. Glass-depth pass.
+   - Enhance `LiquidGlassPanel` with a clearer top-leading to bottom-trailing gradient stroke.
+   - Add an inset stroke or inner-highlight approximation.
+   - Add subtle outer separation: black shadow plus very low white/accent glow.
+   - Keep active/inactive window opacity adjustment through `controlActiveState`.
+   - Avoid heavy per-row card effects in tables.
+   - Run `swift build --target AppUI`.
+
+5. Cinematic detail background pass.
+   - Replace the single linear backdrop with layered static gradients.
+   - Use very low-opacity blue/purple/white glow and a dark overlay.
+   - Allow only the background layer to fill the available area; keep content safe-area protected.
+   - Run `swift build --target AppUI`.
+
+6. Files and metadata card pass.
+   - Rework file rows so filename/size are left aligned and status/action groups are visually separated.
+   - Present availability as a badge and resume position as secondary text or compact badge.
+   - Apply `LiquidGlassButtonStyle` to play/resume where appropriate.
+   - In metadata, change `Status` to `Match Status` and present it as a badge.
+   - Avoid repeating the same summary prominently in both header and metadata card; if summary remains in metadata, move it to lower visual priority.
+   - Continue using `—` for empty values and never show `Not provided`.
+   - Run `swift build --target AppUI`.
+
+7. Browser semantic polish pass.
+   - Keep `Table`.
+   - Replace or demote the `Year / Episode` column because it often produces empty cells.
+   - Prefer showing metadata state in a `Metadata` column using existing `LibraryItemSummary.metadataLabel`.
+   - Improve title cell with icon, title, and optional secondary line if it remains readable in table cells.
+   - Keep row height around 44-56 through padding, not custom row containers.
+   - Run `swift build --target AppUI`.
+
+8. Browser header / toolbar polish pass.
+   - Replace the hard black toolbar area with a browser header.
+   - Show `Library` and `Local library` unless a current snapshot/folder count is already available.
+   - Keep Add Folder / Scan actions on the right or in a clearly grouped action cluster.
+   - Do not add search UI.
+   - Run `swift build --target AppUI`.
+
+9. Sidebar selected/hover polish pass.
+   - Keep existing sidebar sections and `.listStyle(.sidebar)`.
+   - Add a small reusable sidebar row only if it preserves `List(selection:)` tags.
+   - Add capsule-like selected highlight and subtle hover brighten.
+   - Do not add count badges or cursor tracking.
+   - Run `swift build --target AppUI`.
+
+10. Final verification.
+    - Run the full verification plan below.
+    - If any UI polish requires unsupported data, document it as deferred instead of fabricating values.
+
+### Risk And Mitigation
+
+| Risk | Impact | Mitigation |
+| --- | --- | --- |
+| Safe-area fix causes new spacing regressions | Medium | Prefer local content padding and `safeAreaPadding`; avoid window/titlebar APIs. |
+| Header refactor breaks poster layout | Medium | Preserve fixed 2:3 poster frame and top-aligned `HStack`. |
+| Glass depth becomes too heavy | Medium | Keep new effects static and apply to section cards, not every table row. |
+| Table semantic polish disrupts selection | Medium | Keep `Table`, `ForEach`, and `TableRow` unchanged; only adjust columns/cell views. |
+| Metadata/file polish leaks business logic into AppUI | High | Use existing labels from Application DTOs; only friendly-case or badge those labels. |
+| Sidebar custom row breaks selection | Medium | Keep tags attached to rows and revert to native `.listStyle(.sidebar)` if selection behavior changes. |
+| AppUI imports drift | High | Run forbidden import grep after changes. |
+
+### Verification Commands
+
+Intermediate command after each large step:
+
+```bash
+swift build --target AppUI
+```
+
+Final commands:
+
+```bash
+swift test --list-tests
+swift build --target AppUI
+swift build --target CineMindApp
+swift test
+grep -R "import Persistence\|import PlaybackAVFoundation\|import Metadata\|import Subtitle\|import AI" Sources/AppUI/ || true
+```
+
+Expected forbidden import result:
+
+- no output from the forbidden AppUI import check
+
+### Phase 4.8H Acceptance Criteria
+
+- Detail header is not clipped by the titlebar or safe area.
+- Poster placeholder icon and text are fully visible.
+- Header's primary title is `detail.displayTitle`, not media type.
+- `Movie` / `TV Episode`, availability, and metadata status are auxiliary badges.
+- Poster placeholder remains 2:3 and visually richer without debug text.
+- Header, metadata, and files cards have visible but restrained glass thickness.
+- Detail background has static cinematic depth instead of a flat black wall.
+- Files card groups file identity, status, resume information, and actions clearly.
+- Metadata card uses a badge for match status and avoids prominent summary duplication.
+- Browser table no longer emphasizes an often-empty `Year / Episode` column.
+- Browser table expresses metadata status using existing `metadataLabel`.
+- Browser header communicates `Library` / `Local library` and groups Add Folder / Scan cleanly.
+- Sidebar selected row reads more like a glass selection while preserving native selection behavior.
+- AppUI boundary remains clean.
+- All final verification commands pass.

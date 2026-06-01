@@ -48,7 +48,21 @@ private struct LiquidGlassSurfaceModifier: ViewModifier {
                     .fill(material)
                     .overlay {
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(tint.opacity(isActive ? 0.32 : 0.22))
+                            .fill(tint.opacity(isActive ? 0.34 : 0.24))
+                    }
+                    .overlay(alignment: .topLeading) {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        .white.opacity(isActive ? 0.10 : 0.05),
+                                        .clear
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .center
+                                )
+                            )
+                            .blendMode(.screen)
                     }
             }
             .overlay {
@@ -56,9 +70,10 @@ private struct LiquidGlassSurfaceModifier: ViewModifier {
                     .strokeBorder(
                         LinearGradient(
                             colors: [
-                                .white.opacity(isActive ? 0.30 : 0.18),
-                                .white.opacity(0.08),
-                                .black.opacity(0.30)
+                                .white.opacity(isActive ? 0.22 : 0.12),
+                                .white.opacity(isActive ? 0.05 : 0.03),
+                                .clear,
+                                .black.opacity(isActive ? 0.24 : 0.16)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -66,10 +81,32 @@ private struct LiquidGlassSurfaceModifier: ViewModifier {
                         lineWidth: 1
                     )
             }
+            .overlay {
+                RoundedRectangle(cornerRadius: max(cornerRadius - 1, 1), style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(isActive ? 0.10 : 0.05),
+                                .clear,
+                                .black.opacity(isActive ? 0.16 : 0.10)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 0.6
+                    )
+                    .padding(1)
+            }
+            .shadow(
+                color: .white.opacity(isActive ? 0.035 : 0.015),
+                radius: isActive ? 10 : 6,
+                x: -2,
+                y: -2
+            )
             .shadow(
                 color: .black.opacity(isActive ? 0.34 : 0.22),
-                radius: isActive ? 18 : 10,
-                y: isActive ? 10 : 6
+                radius: isActive ? 20 : 12,
+                y: isActive ? 12 : 7
             )
     }
 }
