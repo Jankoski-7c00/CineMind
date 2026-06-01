@@ -12,7 +12,7 @@ final class MetadataCandidateRankingPolicyTests: XCTestCase {
         let ranked = policy.rankMovieCandidates(for: query, candidates: [moon, arrival])
 
         XCTAssertEqual(ranked.map(\.identifier), [arrival.identifier, moon.identifier])
-        XCTAssertEqual(ranked[0].confidence, 0.98, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[0].confidence, 0.99, accuracy: 0.000_001)
         XCTAssertEqual(confidenceInput(ranked[0], "title_score"), 1.0, accuracy: 0.000_001)
         XCTAssertEqual(confidenceInput(ranked[0], "year_match"), 1.0, accuracy: 0.000_001)
         XCTAssertEqual(ranked[0].confidenceInputs["media_type_match"], "true")
@@ -31,7 +31,7 @@ final class MetadataCandidateRankingPolicyTests: XCTestCase {
 
         let ranked = policy.rankMovieCandidates(for: query, candidates: [candidate])
 
-        XCTAssertEqual(ranked[0].confidence, 0.98, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[0].confidence, 0.99, accuracy: 0.000_001)
         XCTAssertEqual(confidenceInput(ranked[0], "title_score"), 1.0, accuracy: 0.000_001)
     }
 
@@ -54,9 +54,24 @@ final class MetadataCandidateRankingPolicyTests: XCTestCase {
         let penalized = try XCTUnwrap(ranked.first { $0.identifier == wrongYear.identifier })
 
         XCTAssertEqual(ranked.first?.identifier, correctYear.identifier)
-        XCTAssertEqual(penalized.confidence, 0.78, accuracy: 0.000_001)
+        XCTAssertEqual(penalized.confidence, 0.824, accuracy: 0.000_001)
         XCTAssertLessThan(penalized.confidence, 0.85)
-        XCTAssertEqual(confidenceInput(penalized, "year_match"), 0.0, accuracy: 0.000_001)
+        XCTAssertEqual(confidenceInput(penalized, "year_match"), 0.2, accuracy: 0.000_001)
+    }
+
+    func testYearOffsetCurveKeepsNearYearsHighWithoutIgnoringLargeMismatch() {
+        let query = MetadataSearchQuery.movie(title: "Arrival", year: 2016)
+        let oneYearOff = movieCandidate(id: 1, title: "Arrival", year: 2017)
+        let twoYearsOff = movieCandidate(id: 2, title: "Arrival", year: 2018)
+        let farOff = movieCandidate(id: 3, title: "Arrival", year: 2020)
+
+        let ranked = policy.rankMovieCandidates(for: query, candidates: [farOff, twoYearsOff, oneYearOff])
+
+        XCTAssertEqual(ranked.map(\.identifier), [oneYearOff.identifier, twoYearsOff.identifier, farOff.identifier])
+        XCTAssertEqual(ranked.map { confidenceInput($0, "year_match") }, [0.9, 0.6, 0.2])
+        XCTAssertEqual(ranked[0].confidence, 0.978, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[1].confidence, 0.912, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[2].confidence, 0.824, accuracy: 0.000_001)
     }
 
     func testMovieTitleContainmentHandlesHighConfidenceAliasWithoutYear() {
@@ -74,6 +89,43 @@ final class MetadataCandidateRankingPolicyTests: XCTestCase {
         XCTAssertEqual(confidenceInput(ranked[0], "title_containment_score"), 0.95, accuracy: 0.000_001)
         XCTAssertEqual(ranked[0].confidenceInputs["title_score_strategy"], "containment")
         XCTAssertEqual(MetadataAutoMatchPolicy().decision(for: [ranked[0]]), .matched(ranked[0]))
+    }
+
+    func testTitleNormalizationFoldsDiacritics() {
+        let query = MetadataSearchQuery.movie(title: "Amélie", year: 2001)
+        let candidate = movieCandidate(id: 1, title: "Amelie", year: 2001)
+
+        let ranked = policy.rankMovieCandidates(for: query, candidates: [candidate])
+
+        XCTAssertEqual(ranked[0].confidence, 0.99, accuracy: 0.000_001)
+        XCTAssertEqual(confidenceInput(ranked[0], "title_score"), 1.0, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[0].confidenceInputs["title_score_strategy"], "exact")
+    }
+
+    func testFuzzyTitleScoreHandlesSmallSpellingDifference() {
+        let query = MetadataSearchQuery.movie(title: "The Favourite")
+        let candidate = movieCandidate(id: 1, title: "The Favorite")
+
+        let ranked = policy.rankMovieCandidates(for: query, candidates: [candidate])
+
+        XCTAssertEqual(ranked[0].confidence, 0.89, accuracy: 0.000_001)
+        XCTAssertEqual(confidenceInput(ranked[0], "title_fuzzy_score"), 1.0, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[0].confidenceInputs["title_score_strategy"], "fuzzy")
+    }
+
+    func testPrefixScoreHandlesSubtitleInflation() {
+        let query = MetadataSearchQuery.movie(title: "Pirates of the Caribbean", year: 2003)
+        let candidate = movieCandidate(
+            id: 1,
+            title: "Pirates of the Caribbean: The Curse of the Black Pearl",
+            year: 2003
+        )
+
+        let ranked = policy.rankMovieCandidates(for: query, candidates: [candidate])
+
+        XCTAssertEqual(ranked[0].confidence, 0.8674, accuracy: 0.000_001)
+        XCTAssertEqual(confidenceInput(ranked[0], "title_prefix_score"), 0.83, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[0].confidenceInputs["title_score_strategy"], "prefix")
     }
 
     func testShortTitleContainmentDoesNotAutoMatch() {
@@ -98,10 +150,45 @@ final class MetadataCandidateRankingPolicyTests: XCTestCase {
 
         let ranked = policy.rankEpisodeCandidates(for: query, candidates: [candidate])
 
-        XCTAssertEqual(ranked[0].confidence, 0.96, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[0].confidence, 0.99, accuracy: 0.000_001)
         XCTAssertEqual(confidenceInput(ranked[0], "title_score"), 1.0, accuracy: 0.000_001)
         XCTAssertEqual(ranked[0].confidenceInputs["episode_exists"], "true")
         XCTAssertEqual(ranked[0].confidenceInputs["media_type_match"], "true")
+    }
+
+    func testEpisodeTitleContributesToEpisodeRanking() {
+        let query = MetadataSearchQuery.episode(
+            seriesTitle: "Example Show",
+            seasonNumber: 1,
+            episodeNumber: 5,
+            episodeTitle: "The Big Twist"
+        )
+        let correctEpisodeTitle = episodeCandidate(
+            seriesID: 1,
+            title: "Example Show",
+            season: 1,
+            episode: 5,
+            episodeTitle: "The Big Twist"
+        )
+        let wrongEpisodeTitle = episodeCandidate(
+            seriesID: 2,
+            title: "Example Show",
+            season: 1,
+            episode: 5,
+            episodeTitle: "A Quiet Hour"
+        )
+
+        let ranked = policy.rankEpisodeCandidates(
+            for: query,
+            candidates: [wrongEpisodeTitle, correctEpisodeTitle]
+        )
+
+        XCTAssertEqual(ranked.map(\.identifier), [correctEpisodeTitle.identifier, wrongEpisodeTitle.identifier])
+        XCTAssertEqual(ranked[0].confidence, 0.99, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[1].confidence, 0.82, accuracy: 0.000_001)
+        XCTAssertEqual(confidenceInput(ranked[0], "series_title_score"), 1.0, accuracy: 0.000_001)
+        XCTAssertEqual(confidenceInput(ranked[0], "episode_title_score"), 1.0, accuracy: 0.000_001)
+        XCTAssertEqual(confidenceInput(ranked[1], "episode_title_score"), 0.0, accuracy: 0.000_001)
     }
 
     func testMismatchedProviderIdentifiersScoreZeroWithoutThrowing() {
@@ -150,6 +237,18 @@ final class MetadataCandidateRankingPolicyTests: XCTestCase {
 
         XCTAssertEqual(ranked.map(\.identifier), [first.identifier, second.identifier])
         XCTAssertEqual(ranked[0].confidence, ranked[1].confidence, accuracy: 0.000_001)
+    }
+
+    func testNoYearSameTitleCandidatesRemainAmbiguous() {
+        let query = MetadataSearchQuery.movie(title: "Crash")
+        let first = movieCandidate(id: 1, title: "Crash", year: 1996)
+        let second = movieCandidate(id: 2, title: "Crash", year: 2004)
+
+        let ranked = policy.rankMovieCandidates(for: query, candidates: [first, second])
+
+        XCTAssertEqual(ranked[0].confidence, 0.89, accuracy: 0.000_001)
+        XCTAssertEqual(ranked[1].confidence, 0.89, accuracy: 0.000_001)
+        XCTAssertEqual(MetadataAutoMatchPolicy().decision(for: ranked), .ambiguous)
     }
 
     func testPolicyDoesNotMutateCandidates() {
@@ -230,6 +329,7 @@ private func episodeCandidate(
     originalTitle: String? = nil,
     season: Int,
     episode: Int,
+    episodeTitle: String? = nil,
     confidence: Double = 0.0,
     confidenceInputs: [String: String] = [:]
 ) -> MetadataCandidate {
@@ -241,6 +341,7 @@ private func episodeCandidate(
         )!,
         displayTitle: title,
         originalTitle: originalTitle,
+        episodeTitle: episodeTitle,
         confidence: confidence,
         confidenceInputs: confidenceInputs
     )

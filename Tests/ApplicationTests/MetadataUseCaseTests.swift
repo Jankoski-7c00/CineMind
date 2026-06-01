@@ -53,6 +53,38 @@ final class MetadataUseCaseTests: XCTestCase {
         XCTAssertEqual(try context.store.fetchPosterAssets(mediaItemID: context.item.id), [])
     }
 
+    func testSearchQueryIncludesUniqueIMDBIDFromMediaFilePath() async throws {
+        let context = try makeMediaContext(
+            relativePath: "Movies/Arrival.tt0137523.2016.mkv",
+            fileName: "Arrival.tt0137523.2016.mkv"
+        )
+        let provider = FakeMetadataProvider()
+
+        _ = try await SearchMetadataCandidatesUseCase(
+            store: context.store,
+            provider: provider
+        ).search(mediaItemID: context.item.id)
+
+        XCTAssertEqual(provider.searchQueries.first?.imdbID, "tt0137523")
+    }
+
+    func testSearchQueryIgnoresConflictingIMDBIDs() async throws {
+        let item = MediaItem(mediaType: .movie, title: "Arrival tt0137523", year: 2016)
+        let context = try makeMediaContext(
+            item: item,
+            relativePath: "Movies/Arrival.tt0000001.mkv",
+            fileName: "Arrival.tt0000001.mkv"
+        )
+        let provider = FakeMetadataProvider()
+
+        _ = try await SearchMetadataCandidatesUseCase(
+            store: context.store,
+            provider: provider
+        ).search(mediaItemID: context.item.id)
+
+        XCTAssertNil(provider.searchQueries.first?.imdbID)
+    }
+
     func testMetadataActionServiceMapsSearchCandidatesForAppUI() async throws {
         let context = try makeMediaContext()
         let provider = FakeMetadataProvider()
@@ -1756,7 +1788,9 @@ final class MetadataUseCaseTests: XCTestCase {
     }
 
     private func makeMediaContext(
-        item: MediaItem = MediaItem(mediaType: .movie, title: "Arrival", year: 2016)
+        item: MediaItem = MediaItem(mediaType: .movie, title: "Arrival", year: 2016),
+        relativePath: String? = nil,
+        fileName: String? = nil
     ) throws -> MetadataTestContext {
         let store = try CineMindStore(path: databaseURL.path)
         let library = try store.createOrLoadLibrary(name: "Local")
@@ -1765,12 +1799,14 @@ final class MetadataUseCaseTests: XCTestCase {
             displayName: "Movies",
             rootPath: "/media/movies"
         )
+        let resolvedRelativePath = relativePath ?? "\(item.id).mkv"
+        let resolvedFileName = fileName ?? URL(fileURLWithPath: resolvedRelativePath).lastPathComponent
         let file = MediaFile(
             mediaItemID: item.id,
             libraryFolderID: folder.id,
-            relativePath: "\(item.id).mkv",
+            relativePath: resolvedRelativePath,
             absolutePathHash: "metadata-test-\(UUID().uuidString)",
-            fileName: "\(item.id).mkv",
+            fileName: resolvedFileName,
             fileExtension: "mkv",
             fileSizeBytes: 1,
             modifiedAt: Date(timeIntervalSince1970: 100),

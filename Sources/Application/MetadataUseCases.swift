@@ -62,6 +62,7 @@ public enum MetadataOverrideField: Sendable, Equatable {
 
 public protocol ApplicationMetadataStore {
     func fetchMediaItem(id: MediaItemID) throws -> MediaItem?
+    func fetchMediaFiles(mediaItemID: MediaItemID) throws -> [MediaFile]
     func fetchMetadataItem(mediaItemID: MediaItemID) throws -> MetadataItem?
     func saveMetadataItem(_ item: MetadataItem) throws
     func upsertMetadataExternalIDs(_ externalIDs: [MetadataExternalID]) throws
@@ -131,8 +132,10 @@ public struct SearchMetadataCandidatesUseCase {
         language: String? = nil
     ) async throws -> [MetadataCandidate] {
         let mediaItem = try fetchMediaItem(mediaItemID)
+        let mediaFiles = try store.fetchMediaFiles(mediaItemID: mediaItem.id)
         let query = try MetadataApplicationMapper.searchQuery(
             for: mediaItem,
+            mediaFiles: mediaFiles,
             language: language
         )
         return try await provider.search(query: query)
@@ -183,6 +186,7 @@ public struct AutoMatchMetadataUseCase {
 
         let query = try MetadataApplicationMapper.searchQuery(
             for: mediaItem,
+            mediaFiles: try store.fetchMediaFiles(mediaItemID: mediaItem.id),
             language: language
         )
         let candidates = try await provider.search(query: query)
@@ -645,14 +649,17 @@ public struct SelectPosterAssetUseCase {
 private enum MetadataApplicationMapper {
     static func searchQuery(
         for mediaItem: MediaItem,
+        mediaFiles: [MediaFile] = [],
         language: String?
     ) throws -> MetadataSearchQuery {
+        let imdbID = IMDBHintExtractor.uniqueIMDBID(mediaItem: mediaItem, mediaFiles: mediaFiles)
         switch mediaItem.mediaType {
         case .movie:
             return .movie(
                 mediaItemID: mediaItem.id,
                 title: mediaItem.title,
                 year: mediaItem.year,
+                imdbID: imdbID,
                 language: language
             )
         case .episode:
@@ -665,6 +672,7 @@ private enum MetadataApplicationMapper {
                 seasonNumber: episodeInfo.seasonNumber,
                 episodeNumber: episodeInfo.episodeNumber,
                 episodeTitle: episodeInfo.episodeTitle,
+                imdbID: imdbID,
                 language: language
             )
         }
@@ -701,6 +709,34 @@ private enum MetadataApplicationMapper {
                     providerID: identifier.rawValue
                 )
             }
+        }
+    }
+}
+
+private enum IMDBHintExtractor {
+    static func uniqueIMDBID(mediaItem: MediaItem, mediaFiles: [MediaFile]) -> String? {
+        var ids = Set<String>()
+        collectIDs(from: mediaItem.title, into: &ids)
+        if let episodeTitle = mediaItem.episodeInfo?.episodeTitle {
+            collectIDs(from: episodeTitle, into: &ids)
+        }
+        for file in mediaFiles {
+            collectIDs(from: file.fileName, into: &ids)
+            collectIDs(from: file.relativePath, into: &ids)
+        }
+        return ids.count == 1 ? ids.first : nil
+    }
+
+    private static func collectIDs(from value: String, into ids: inout Set<String>) {
+        guard let regex = try? NSRegularExpression(pattern: #"(?i)\btt\d{7,9}\b"#) else {
+            return
+        }
+        let range = NSRange(value.startIndex..., in: value)
+        for match in regex.matches(in: value, range: range) {
+            guard let idRange = Range(match.range, in: value) else {
+                continue
+            }
+            ids.insert(String(value[idRange]).lowercased())
         }
     }
 }

@@ -147,6 +147,116 @@ final class TMDBMetadataProviderTests: XCTestCase {
         XCTAssertTrue(request.url?.absoluteString.contains("%26") == true)
     }
 
+    func testMovieSearchFallsBackFromPrimaryReleaseYearToYearThenNoYear() async throws {
+        let client = FakeMetadataHTTPClient { request in
+            if request.queryValue("primary_release_year") != nil {
+                return jsonResponse(#"{"results":[]}"#)
+            }
+            if request.queryValue("year") != nil {
+                return jsonResponse(
+                    movieSearchJSON(
+                        id: 1,
+                        title: "Unrelated",
+                        releaseDate: "2015-01-01"
+                    )
+                )
+            }
+            return jsonResponse(
+                movieSearchJSON(
+                    id: 34000,
+                    title: "The Million Pound Note",
+                    releaseDate: "1954-01-07"
+                )
+            )
+        }
+        let provider = makeProvider(client: client)
+
+        let candidates = try await provider.search(
+            query: .movie(title: "The Million Pound Bank Note", year: 1954)
+        )
+
+        XCTAssertEqual(client.requests.map { $0.url?.path }, [
+            "/3/search/movie",
+            "/3/search/movie",
+            "/3/search/movie"
+        ])
+        XCTAssertEqual(client.requests[0].queryValue("primary_release_year"), "1954")
+        XCTAssertEqual(client.requests[1].queryValue("year"), "1954")
+        XCTAssertNil(client.requests[2].queryValue("primary_release_year"))
+        XCTAssertNil(client.requests[2].queryValue("year"))
+        XCTAssertEqual(candidates.first?.identifier.rawValue, "movie:34000")
+        XCTAssertGreaterThanOrEqual(candidates.first?.confidence ?? 0.0, 0.85)
+    }
+
+    func testMovieSearchStopsAfterHighConfidencePrimaryResult() async throws {
+        let client = FakeMetadataHTTPClient { _ in
+            jsonResponse(movieSearchJSON(id: 550, title: "Arrival", releaseDate: "2016-11-11"))
+        }
+        let provider = makeProvider(client: client)
+
+        let candidates = try await provider.search(query: .movie(title: "Arrival", year: 2016))
+
+        XCTAssertEqual(client.requests.count, 1)
+        XCTAssertEqual(client.requests[0].queryValue("primary_release_year"), "2016")
+        XCTAssertEqual(candidates.first?.identifier.rawValue, "movie:550")
+        XCTAssertEqual(candidates.first?.confidence, 0.99)
+    }
+
+    func testMovieSearchFallbackDeduplicatesAttemptsBeforeRanking() async throws {
+        let client = FakeMetadataHTTPClient { request in
+            if request.queryValue("primary_release_year") != nil {
+                return jsonResponse(movieSearchJSON(id: 1, title: "Unrelated", releaseDate: "2016-01-01"))
+            }
+            return jsonResponse(
+                #"{"results":["# +
+                movieSearchResultJSON(id: 1, title: "Unrelated", releaseDate: "2016-01-01") + "," +
+                movieSearchResultJSON(id: 550, title: "Arrival", releaseDate: "2016-11-11") +
+                #"]}"#
+            )
+        }
+        let provider = makeProvider(client: client)
+
+        let candidates = try await provider.search(query: .movie(title: "Arrival", year: 2016))
+
+        XCTAssertEqual(client.requests.count, 2)
+        XCTAssertEqual(candidates.map(\.identifier.rawValue), ["movie:550", "movie:1"])
+    }
+
+    func testMovieSearchUsesIMDBFindBeforeTextSearch() async throws {
+        let client = FakeMetadataHTTPClient { request in
+            XCTAssertEqual(request.url?.path, "/3/find/tt0137523")
+            return jsonResponse(findJSON(movieResults: [
+                movieSearchResultJSON(id: 550, title: "Fight Club", releaseDate: "1999-10-15")
+            ]))
+        }
+        let provider = makeProvider(client: client)
+
+        let candidates = try await provider.search(
+            query: .movie(title: "Fight Club", year: 1999, imdbID: "TT0137523")
+        )
+
+        XCTAssertEqual(client.requests.count, 1)
+        XCTAssertEqual(client.requests[0].queryValue("external_source"), "imdb_id")
+        XCTAssertEqual(candidates.first?.identifier.rawValue, "movie:550")
+    }
+
+    func testMovieSearchFallsBackToTextSearchWhenIMDBFindHasNoMovieResult() async throws {
+        let client = FakeMetadataHTTPClient { request in
+            if request.url?.path.starts(with: "/3/find/") == true {
+                return jsonResponse(findJSON(movieResults: []))
+            }
+            return jsonResponse(movieSearchJSON(id: 550, title: "Arrival", releaseDate: "2016-11-11"))
+        }
+        let provider = makeProvider(client: client)
+
+        let candidates = try await provider.search(
+            query: .movie(title: "Arrival", year: 2016, imdbID: "tt0000001")
+        )
+
+        XCTAssertEqual(client.requests.map { $0.url?.path }, ["/3/find/tt0000001", "/3/search/movie"])
+        XCTAssertEqual(candidates.first?.identifier.rawValue, "movie:550")
+    }
+
     func testMovieDetailsRequestUsesExternalIDs() async throws {
         let client = FakeMetadataHTTPClient { _ in
             jsonResponse(movieDetailsJSON())
@@ -232,10 +342,10 @@ final class TMDBMetadataProviderTests: XCTestCase {
         XCTAssertEqual(details.externalIDs[.imdb], "tt0000000")
     }
 
-    func testEpisodeSearchProbesAtMostTopFiveTVCandidates() async throws {
+    func testEpisodeSearchProbesAtMostTopTenTVCandidates() async throws {
         let client = FakeMetadataHTTPClient { request in
             if request.url?.path == "/3/search/tv" {
-                return jsonResponse(tvSearchJSON(count: 7))
+                return jsonResponse(tvSearchJSON(count: 12))
             }
             return jsonResponse(
                 episodeDetailsJSON(
@@ -255,9 +365,59 @@ final class TMDBMetadataProviderTests: XCTestCase {
             $0.url?.path.contains("/season/1/episode/2") == true
         }
         XCTAssertEqual(client.requests.first?.url?.path, "/3/search/tv")
-        XCTAssertEqual(episodeProbeRequests.count, 5)
-        XCTAssertEqual(candidates.count, 5)
-        XCTAssertEqual(episodeProbeRequests.compactMap { $0.seriesIDFromEpisodePath() }, [1, 2, 3, 4, 5])
+        XCTAssertEqual(episodeProbeRequests.count, 10)
+        XCTAssertEqual(candidates.count, 10)
+        XCTAssertEqual(episodeProbeRequests.compactMap { $0.seriesIDFromEpisodePath() }, Array(1...10))
+    }
+
+    func testEpisodeSearchCanReturnCandidateAfterFirstFiveSeriesMiss() async throws {
+        let client = FakeMetadataHTTPClient { request in
+            if request.url?.path == "/3/search/tv" {
+                return jsonResponse(tvSearchJSON(count: 10))
+            }
+            if request.seriesIDFromEpisodePath() == 6 {
+                return jsonResponse(episodeDetailsJSON(id: 1006, season: 1, episode: 2))
+            }
+            return jsonResponse(#"{"status_message":"Not found"}"#, statusCode: 404)
+        }
+        let provider = makeProvider(client: client)
+
+        let candidates = try await provider.search(
+            query: .episode(seriesTitle: "Severance", seasonNumber: 1, episodeNumber: 2)
+        )
+
+        XCTAssertEqual(candidates.map(\.identifier.rawValue), ["tv:6:s1:e2"])
+        XCTAssertEqual(candidates.first?.episodeTitle, "Half Loop")
+    }
+
+    func testEpisodeSearchUsesIMDBFindBeforeTVSearch() async throws {
+        let client = FakeMetadataHTTPClient { request in
+            XCTAssertEqual(request.url?.path, "/3/find/tt0000000")
+            return jsonResponse(findJSON(tvEpisodeResults: [
+                tvEpisodeFindResultJSON(
+                    id: 12345,
+                    name: "Half Loop",
+                    showID: 95396,
+                    season: 1,
+                    episode: 2
+                )
+            ]))
+        }
+        let provider = makeProvider(client: client)
+
+        let candidates = try await provider.search(
+            query: .episode(
+                seriesTitle: "Severance",
+                seasonNumber: 1,
+                episodeNumber: 2,
+                imdbID: "tt0000000"
+            )
+        )
+
+        XCTAssertEqual(client.requests.count, 1)
+        XCTAssertEqual(client.requests[0].queryValue("external_source"), "imdb_id")
+        XCTAssertEqual(candidates.first?.identifier.rawValue, "tv:95396:s1:e2")
+        XCTAssertEqual(candidates.first?.episodeTitle, "Half Loop")
     }
 
     func testTVSeriesImageRequestUsesSeriesIdentifier() async throws {
@@ -472,6 +632,54 @@ private func movieDetailsJSON() -> String {
       "release_date": "1999-10-15",
       "poster_path": "/pB8BM7pd.jpg",
       "external_ids": { "imdb_id": "tt0137523" }
+    }
+    """
+}
+
+private func movieSearchJSON(id: Int, title: String, releaseDate: String) -> String {
+    #"{"results":["# + movieSearchResultJSON(id: id, title: title, releaseDate: releaseDate) + #"]}"#
+}
+
+private func movieSearchResultJSON(id: Int, title: String, releaseDate: String) -> String {
+    """
+    {
+      "id": \(id),
+      "title": "\(title)",
+      "original_title": "\(title)",
+      "overview": "Search result.",
+      "release_date": "\(releaseDate)"
+    }
+    """
+}
+
+private func findJSON(
+    movieResults: [String] = [],
+    tvEpisodeResults: [String] = []
+) -> String {
+    """
+    {
+      "movie_results": [\(movieResults.joined(separator: ","))],
+      "tv_episode_results": [\(tvEpisodeResults.joined(separator: ","))]
+    }
+    """
+}
+
+private func tvEpisodeFindResultJSON(
+    id: Int,
+    name: String,
+    showID: Int,
+    season: Int,
+    episode: Int
+) -> String {
+    """
+    {
+      "id": \(id),
+      "name": "\(name)",
+      "overview": "Episode search result.",
+      "air_date": "2022-02-18",
+      "show_id": \(showID),
+      "season_number": \(season),
+      "episode_number": \(episode)
     }
     """
 }

@@ -37,6 +37,7 @@ public struct MetadataSearchQuery: Equatable, Sendable {
     public var seriesTitle: String?
     public var seasonNumber: Int?
     public var episodeNumber: Int?
+    public var imdbID: String?
     public var language: String?
 
     public init(
@@ -47,6 +48,7 @@ public struct MetadataSearchQuery: Equatable, Sendable {
         seriesTitle: String? = nil,
         seasonNumber: Int? = nil,
         episodeNumber: Int? = nil,
+        imdbID: String? = nil,
         language: String? = nil
     ) {
         self.mediaItemID = mediaItemID
@@ -56,6 +58,7 @@ public struct MetadataSearchQuery: Equatable, Sendable {
         self.seriesTitle = seriesTitle
         self.seasonNumber = seasonNumber
         self.episodeNumber = episodeNumber
+        self.imdbID = imdbID
         self.language = language
     }
 
@@ -63,6 +66,7 @@ public struct MetadataSearchQuery: Equatable, Sendable {
         mediaItemID: MediaItemID? = nil,
         title: String,
         year: Int? = nil,
+        imdbID: String? = nil,
         language: String? = nil
     ) -> MetadataSearchQuery {
         MetadataSearchQuery(
@@ -70,6 +74,7 @@ public struct MetadataSearchQuery: Equatable, Sendable {
             mediaType: .movie,
             title: title,
             year: year,
+            imdbID: imdbID,
             language: language
         )
     }
@@ -80,6 +85,7 @@ public struct MetadataSearchQuery: Equatable, Sendable {
         seasonNumber: Int,
         episodeNumber: Int,
         episodeTitle: String? = nil,
+        imdbID: String? = nil,
         language: String? = nil
     ) -> MetadataSearchQuery {
         MetadataSearchQuery(
@@ -89,6 +95,7 @@ public struct MetadataSearchQuery: Equatable, Sendable {
             seriesTitle: seriesTitle,
             seasonNumber: seasonNumber,
             episodeNumber: episodeNumber,
+            imdbID: imdbID,
             language: language
         )
     }
@@ -210,6 +217,7 @@ public struct MetadataCandidate: Equatable, Sendable {
     public var originalTitle: String?
     public var year: Int?
     public var airDate: String?
+    public var episodeTitle: String?
     public var overviewPreview: String?
     public var confidence: Double
     public var confidenceInputs: [String: String]
@@ -220,6 +228,7 @@ public struct MetadataCandidate: Equatable, Sendable {
         originalTitle: String? = nil,
         year: Int? = nil,
         airDate: String? = nil,
+        episodeTitle: String? = nil,
         overviewPreview: String? = nil,
         confidence: Double,
         confidenceInputs: [String: String] = [:]
@@ -229,6 +238,7 @@ public struct MetadataCandidate: Equatable, Sendable {
         self.originalTitle = originalTitle
         self.year = year
         self.airDate = airDate
+        self.episodeTitle = episodeTitle
         self.overviewPreview = overviewPreview
         self.confidence = min(1.0, max(0.0, confidence))
         self.confidenceInputs = confidenceInputs
@@ -366,6 +376,9 @@ public struct TMDBMetadataProvider: MetadataProvider {
 
     public let providerName: MetadataProviderName = .tmdb
 
+    private static let fallbackConfidenceThreshold = 0.85
+    private static let episodeSeriesProbeLimit = 10
+
     private let configuration: Configuration
     private let httpClient: any MetadataHTTPClient
     private let decoder = JSONDecoder()
@@ -479,28 +492,35 @@ public struct TMDBMetadataProvider: MetadataProvider {
     }
 
     private func searchMovies(query: MetadataSearchQuery) async throws -> [MetadataCandidate] {
-        var queryItems = defaultSearchQueryItems(query: query.title, language: query.language)
-        if let year = query.year {
-            queryItems.append(URLQueryItem(name: "primary_release_year", value: "\(year)"))
+        if let foundCandidates = try await findCandidates(query: query), !foundCandidates.isEmpty {
+            return MetadataCandidateRankingPolicy().rankMovieCandidates(for: query, candidates: foundCandidates)
         }
 
-        let data = try await send(path: "/3/search/movie", queryItems: queryItems)
-        let response = try decode(TMDBMovieSearchResponse.self, from: data)
-        let candidates: [MetadataCandidate] = response.results.compactMap { result in
-            guard let identifier = MetadataProviderIdentifier.movie(id: result.id) else {
-                return nil
+        var mergedCandidates: [MetadataCandidate] = []
+        for attempt in movieSearchAttempts(for: query) {
+            let candidates = try await searchMovieCandidates(query: query, attempt: attempt)
+            mergedCandidates = merged(mergedCandidates, with: candidates)
+            let ranked = MetadataCandidateRankingPolicy().rankMovieCandidates(for: query, candidates: mergedCandidates)
+            if (ranked.first?.confidence ?? 0.0) >= Self.fallbackConfidenceThreshold {
+                return ranked
             }
-            let year = year(from: result.releaseDate)
-            return MetadataCandidate(
-                identifier: identifier,
-                displayTitle: result.title ?? result.originalTitle ?? "Untitled Movie",
-                originalTitle: result.originalTitle,
-                year: year,
-                overviewPreview: overviewPreview(result.overview),
-                confidence: 0.0
-            )
         }
-        return MetadataCandidateRankingPolicy().rankMovieCandidates(for: query, candidates: candidates)
+
+        return MetadataCandidateRankingPolicy().rankMovieCandidates(for: query, candidates: mergedCandidates)
+    }
+
+    private func searchMovieCandidates(
+        query: MetadataSearchQuery,
+        attempt: MovieSearchAttempt
+    ) async throws -> [MetadataCandidate] {
+        let data = try await send(
+            path: "/3/search/movie",
+            queryItems: movieSearchQueryItems(query: query, attempt: attempt)
+        )
+        let response = try decode(TMDBMovieSearchResponse.self, from: data)
+        return response.results.compactMap {
+            movieCandidate(from: $0)
+        }
     }
 
     private func searchEpisodes(query: MetadataSearchQuery) async throws -> [MetadataCandidate] {
@@ -510,6 +530,10 @@ public struct TMDBMetadataProvider: MetadataProvider {
             throw MetadataError.invalidResponse
         }
 
+        if let foundCandidates = try await findCandidates(query: query), !foundCandidates.isEmpty {
+            return MetadataCandidateRankingPolicy().rankEpisodeCandidates(for: query, candidates: foundCandidates)
+        }
+
         let data = try await send(
             path: "/3/search/tv",
             queryItems: defaultSearchQueryItems(query: seriesTitle, language: query.language)
@@ -517,7 +541,7 @@ public struct TMDBMetadataProvider: MetadataProvider {
         let response = try decode(TMDBTVSearchResponse.self, from: data)
         var candidates: [MetadataCandidate] = []
 
-        for series in response.results.prefix(5) {
+        for series in response.results.prefix(Self.episodeSeriesProbeLimit) {
             guard let identifier = MetadataProviderIdentifier.episode(
                 seriesID: series.id,
                 seasonNumber: seasonNumber,
@@ -548,6 +572,7 @@ public struct TMDBMetadataProvider: MetadataProvider {
                     originalTitle: series.originalName,
                     year: year,
                     airDate: episodeDetails.airDate,
+                    episodeTitle: episodeDetails.name,
                     overviewPreview: overviewPreview(episodeDetails.overview ?? series.overview),
                     confidence: 0.0
                 )
@@ -555,6 +580,103 @@ public struct TMDBMetadataProvider: MetadataProvider {
         }
 
         return MetadataCandidateRankingPolicy().rankEpisodeCandidates(for: query, candidates: candidates)
+    }
+
+    private func findCandidates(query: MetadataSearchQuery) async throws -> [MetadataCandidate]? {
+        guard let imdbID = normalizedIMDBID(query.imdbID) else {
+            return nil
+        }
+
+        let data = try await send(
+            path: "/3/find/\(imdbID)",
+            queryItems: [URLQueryItem(name: "external_source", value: "imdb_id")]
+        )
+        let response = try decode(TMDBFindResponse.self, from: data)
+
+        switch query.mediaType {
+        case .movie:
+            return response.movieResults.compactMap {
+                movieCandidate(from: $0)
+            }
+        case .episode:
+            guard let seasonNumber = query.seasonNumber,
+                  let episodeNumber = query.episodeNumber else {
+                return []
+            }
+            let seriesTitle = query.seriesTitle ?? query.title
+            return response.tvEpisodeResults.compactMap { result in
+                guard result.seasonNumber == seasonNumber,
+                      result.episodeNumber == episodeNumber,
+                      let showID = result.showID,
+                      let identifier = MetadataProviderIdentifier.episode(
+                        seriesID: showID,
+                        seasonNumber: seasonNumber,
+                        episodeNumber: episodeNumber
+                      ) else {
+                    return nil
+                }
+
+                return MetadataCandidate(
+                    identifier: identifier,
+                    displayTitle: seriesTitle,
+                    airDate: result.airDate,
+                    episodeTitle: result.name,
+                    overviewPreview: overviewPreview(result.overview),
+                    confidence: 0.0
+                )
+            }
+        }
+    }
+
+    private func movieCandidate(from result: TMDBMovieSearchResult) -> MetadataCandidate? {
+        guard let identifier = MetadataProviderIdentifier.movie(id: result.id) else {
+            return nil
+        }
+        let year = year(from: result.releaseDate)
+        return MetadataCandidate(
+            identifier: identifier,
+            displayTitle: result.title ?? result.originalTitle ?? "Untitled Movie",
+            originalTitle: result.originalTitle,
+            year: year,
+            overviewPreview: overviewPreview(result.overview),
+            confidence: 0.0
+        )
+    }
+
+    private func movieSearchAttempts(for query: MetadataSearchQuery) -> [MovieSearchAttempt] {
+        guard let year = query.year else {
+            return [.none]
+        }
+        return [.primaryReleaseYear(year), .year(year), .none]
+    }
+
+    private func movieSearchQueryItems(
+        query: MetadataSearchQuery,
+        attempt: MovieSearchAttempt
+    ) -> [URLQueryItem] {
+        var queryItems = defaultSearchQueryItems(query: query.title, language: query.language)
+        switch attempt {
+        case .primaryReleaseYear(let year):
+            queryItems.append(URLQueryItem(name: "primary_release_year", value: "\(year)"))
+        case .year(let year):
+            queryItems.append(URLQueryItem(name: "year", value: "\(year)"))
+        case .none:
+            break
+        }
+        return queryItems
+    }
+
+    private func merged(
+        _ existingCandidates: [MetadataCandidate],
+        with newCandidates: [MetadataCandidate]
+    ) -> [MetadataCandidate] {
+        var seenIdentifiers = Set(existingCandidates.map(\.identifier.rawValue))
+        var mergedCandidates = existingCandidates
+        for candidate in newCandidates where !seenIdentifiers.contains(candidate.identifier.rawValue) {
+            seenIdentifiers.insert(candidate.identifier.rawValue)
+            mergedCandidates.append(candidate)
+        }
+        return mergedCandidates
     }
 
     private func defaultSearchQueryItems(query: String, language: String?) -> [URLQueryItem] {
@@ -753,6 +875,42 @@ private struct TMDBTVSearchResult: Decodable {
     }
 }
 
+private enum MovieSearchAttempt {
+    case primaryReleaseYear(Int)
+    case year(Int)
+    case none
+}
+
+private struct TMDBFindResponse: Decodable {
+    var movieResults: [TMDBMovieSearchResult]
+    var tvEpisodeResults: [TMDBTVEpisodeFindResult]
+
+    private enum CodingKeys: String, CodingKey {
+        case movieResults = "movie_results"
+        case tvEpisodeResults = "tv_episode_results"
+    }
+}
+
+private struct TMDBTVEpisodeFindResult: Decodable {
+    var id: Int
+    var name: String?
+    var overview: String?
+    var airDate: String?
+    var seasonNumber: Int?
+    var episodeNumber: Int?
+    var showID: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case overview
+        case airDate = "air_date"
+        case seasonNumber = "season_number"
+        case episodeNumber = "episode_number"
+        case showID = "show_id"
+    }
+}
+
 private struct TMDBMovieDetailsResponse: Decodable {
     var id: Int
     var title: String?
@@ -886,6 +1044,14 @@ private func year(from date: String?) -> Int? {
         return nil
     }
     return Int(date.prefix(4))
+}
+
+private func normalizedIMDBID(_ value: String?) -> String? {
+    guard let candidate = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+          candidate.range(of: #"^tt\d{7,9}$"#, options: .regularExpression) != nil else {
+        return nil
+    }
+    return candidate
 }
 
 private func overviewPreview(_ overview: String?) -> String? {
