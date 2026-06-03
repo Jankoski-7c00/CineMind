@@ -33,8 +33,9 @@ final class PersistenceRepositoryTests: XCTestCase {
             [
                 "libraries",
                 "library_folders",
-                "media_items",
                 "media_files",
+                "media_items",
+                "media_search_fts",
                 "metadata_external_ids",
                 "metadata_items",
                 "metadata_source_records",
@@ -46,7 +47,7 @@ final class PersistenceRepositoryTests: XCTestCase {
                 "subtitle_assets"
             ]
         )
-        XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3, 4])
+        XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3, 4, 5])
     }
 
     func testMigrationIsIdempotentAcrossReopen() throws {
@@ -54,12 +55,12 @@ final class PersistenceRepositoryTests: XCTestCase {
         do {
             let store = try makeStore()
             firstTables = try store.schemaTableNames()
-            XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3, 4])
+            XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3, 4, 5])
         }
 
         let reopened = try makeStore()
         XCTAssertEqual(try reopened.schemaTableNames(), firstTables)
-        XCTAssertEqual(try reopened.appliedMigrationVersions(), [1, 2, 3, 4])
+        XCTAssertEqual(try reopened.appliedMigrationVersions(), [1, 2, 3, 4, 5])
     }
 
     func testV1DatabaseUpgradesThroughV2ToV3WithoutDataLoss() throws {
@@ -126,10 +127,11 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("playback_history"))
 
         let upgraded = try makeStore()
-        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4])
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5])
         XCTAssertTrue(try upgraded.schemaTableNames().contains("playback_history"))
         XCTAssertTrue(try upgraded.schemaTableNames().contains("metadata_items"))
         XCTAssertTrue(try upgraded.schemaTableNames().contains("subtitle_assets"))
+        XCTAssertTrue(try upgraded.schemaTableNames().contains("media_search_fts"))
         XCTAssertEqual(try upgraded.fetchLibrary(id: libraryID)?.name, "Local")
         XCTAssertEqual(try upgraded.fetchLibraryFolders(libraryID: libraryID).map(\.id), [folderID])
         XCTAssertEqual(try upgraded.fetchMediaItem(id: itemID)?.title, "Arrival")
@@ -211,7 +213,7 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("metadata_items"))
 
         let upgraded = try makeStore()
-        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4])
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5])
         XCTAssertEqual(try upgraded.fetchLibrary(id: libraryID)?.name, "CineMind Library")
         XCTAssertEqual(try upgraded.fetchLibraryFolders(libraryID: libraryID).map(\.id), [folderID])
         XCTAssertEqual(try upgraded.fetchMediaItem(id: itemID)?.title, "Arrival")
@@ -249,8 +251,9 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("subtitle_assets"))
 
         let upgraded = try makeStore()
-        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4])
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5])
         XCTAssertTrue(try upgraded.schemaTableNames().contains("subtitle_assets"))
+        XCTAssertTrue(try upgraded.schemaTableNames().contains("media_search_fts"))
         XCTAssertEqual(try upgraded.fetchLibrary(id: libraryID)?.name, "CineMind Library")
         XCTAssertEqual(try upgraded.fetchLibraryFolders(libraryID: libraryID).map(\.id), [folderID])
         XCTAssertEqual(try upgraded.fetchMediaItem(id: itemID)?.title, "Arrival")
@@ -260,6 +263,302 @@ final class PersistenceRepositoryTests: XCTestCase {
                 relativePath: "Arrival (2016).mkv"
             )?.id,
             fileID
+        )
+    }
+
+    func testV4DatabaseUpgradesToV5BackfillsSearchIndexAndReadOnlySearchWorks() throws {
+        let itemID: MediaItemID
+
+        do {
+            let context = try makePlaybackContext()
+            try context.store.saveMetadataItem(
+                MetadataItem(
+                    mediaItemID: context.item.id,
+                    title: "Arrival",
+                    originalTitle: "Premier Contact",
+                    summary: "Heptapod linguistics and first-contact diplomacy."
+                )
+            )
+            itemID = context.item.id
+        }
+
+        try removeV5SchemaObjects()
+        XCTAssertEqual(try RawSQLiteFixture.migrationVersions(path: databaseURL.path), [1, 2, 3, 4])
+        XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("media_search_fts"))
+
+        let upgraded = try makeStore()
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5])
+        XCTAssertTrue(try upgraded.schemaTableNames().contains("media_search_fts"))
+        XCTAssertEqual(
+            try upgraded.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "heptapod", limit: 10)
+            ).map(\.summary.id),
+            [itemID]
+        )
+        XCTAssertEqual(
+            try upgraded.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "Premier", limit: 10)
+            ).map(\.summary.id),
+            [itemID]
+        )
+        XCTAssertEqual(
+            try upgraded.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "2016", limit: 10)
+            ).map(\.summary.id),
+            [itemID]
+        )
+
+        let readOnly = try CineMindStore(readOnlyPath: databaseURL.path)
+        XCTAssertEqual(
+            try readOnly.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "Arrival", limit: 10)
+            ).map(\.summary.id),
+            [itemID]
+        )
+    }
+
+    func testSearchMediaItemsMatchesIndexedFieldsAndKeepsIndexFresh() throws {
+        let store = try makeStore()
+        let movie = MediaItem(
+            id: "search-arrival",
+            mediaType: .movie,
+            title: "Arrival",
+            year: 2016
+        )
+        let episode = MediaItem(
+            id: "search-expanse",
+            mediaType: .episode,
+            title: "The Expanse",
+            episodeInfo: EpisodeInfo(
+                seriesTitle: "The Expanse",
+                seasonNumber: 1,
+                episodeNumber: 1,
+                episodeTitle: "Dulcinea"
+            )
+        )
+        try store.saveMediaItem(movie)
+        try store.saveMediaItem(episode)
+        try store.saveMetadataItem(
+            MetadataItem(
+                mediaItemID: movie.id,
+                title: "Story of Your Life",
+                originalTitle: "L'arrivee",
+                summary: "Linguistics unlocks an alien language."
+            )
+        )
+
+        XCTAssertEqual(
+            try store.searchMediaItems(query: PersistedMediaSearchQuery(text: "Arrival", limit: 10))
+                .map(\.summary.id),
+            [movie.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(query: PersistedMediaSearchQuery(text: "Expanse", limit: 10))
+                .map(\.summary.id),
+            [episode.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(query: PersistedMediaSearchQuery(text: "Dulcinea", limit: 10))
+                .map(\.summary.id),
+            [episode.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(query: PersistedMediaSearchQuery(text: "Story", limit: 10))
+                .map(\.summary.id),
+            [movie.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(query: PersistedMediaSearchQuery(text: "language", limit: 10))
+                .map(\.summary.id),
+            [movie.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(query: PersistedMediaSearchQuery(text: "2016", limit: 10))
+                .map(\.summary.id),
+            [movie.id]
+        )
+
+        try store.saveMetadataItem(
+            MetadataItem(
+                mediaItemID: movie.id,
+                title: "Story of Your Life",
+                originalTitle: "L'arrivee",
+                summary: "Temporal perception changes the mission."
+            )
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(query: PersistedMediaSearchQuery(text: "language", limit: 10))
+                .map(\.summary.id),
+            []
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(query: PersistedMediaSearchQuery(text: "Temporal", limit: 10))
+                .map(\.summary.id),
+            [movie.id]
+        )
+    }
+
+    func testSearchMediaItemsFiltersAndSortsResults() throws {
+        let store = try makeStore()
+        let library = try store.createOrLoadLibrary()
+        let folder = LibraryFolder(libraryID: library.id, displayName: "Movies", rootPath: "/media")
+        try store.addLibraryFolder(folder)
+
+        let olderMovie = MediaItem(
+            id: "search-filter-older",
+            mediaType: .movie,
+            title: "Alpha Search",
+            year: 1999,
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let newerMovie = MediaItem(
+            id: "search-filter-newer",
+            mediaType: .movie,
+            title: "Beta Search",
+            year: 2021,
+            createdAt: Date(timeIntervalSince1970: 2_000),
+            updatedAt: Date(timeIntervalSince1970: 2_000)
+        )
+        let unavailableEpisode = MediaItem(
+            id: "search-filter-episode",
+            mediaType: .episode,
+            title: "Gamma Search",
+            episodeInfo: EpisodeInfo(
+                seriesTitle: "Gamma Search",
+                seasonNumber: 1,
+                episodeNumber: 2,
+                episodeTitle: "Offline"
+            ),
+            createdAt: Date(timeIntervalSince1970: 3_000),
+            updatedAt: Date(timeIntervalSince1970: 3_000)
+        )
+        try store.saveMediaItem(newerMovie)
+        try store.saveMediaItem(unavailableEpisode)
+        try store.saveMediaItem(olderMovie)
+
+        let olderFile = mediaFile(
+            itemID: olderMovie.id,
+            folderID: folder.id,
+            relativePath: "Alpha Search.mkv",
+            absolutePathHash: "search-filter-older",
+            fileSizeBytes: 100
+        )
+        let newerFile = mediaFile(
+            itemID: newerMovie.id,
+            folderID: folder.id,
+            relativePath: "Beta Search.mkv",
+            absolutePathHash: "search-filter-newer",
+            fileSizeBytes: 100
+        )
+        let unavailableFile = mediaFile(
+            itemID: unavailableEpisode.id,
+            folderID: folder.id,
+            relativePath: "Gamma Search.mkv",
+            absolutePathHash: "search-filter-episode",
+            fileSizeBytes: 100,
+            isAvailable: false
+        )
+        try store.saveMediaFile(olderFile)
+        try store.saveMediaFile(newerFile)
+        try store.saveMediaFile(unavailableFile)
+        try store.savePlaybackProgress(
+            mediaItemID: olderMovie.id,
+            mediaFileID: olderFile.id,
+            positionMS: 1_000,
+            durationMS: nil,
+            completed: false,
+            playedAt: Date(timeIntervalSince1970: 4_000)
+        )
+        try store.savePlaybackProgress(
+            mediaItemID: newerMovie.id,
+            mediaFileID: newerFile.id,
+            positionMS: 2_000,
+            durationMS: nil,
+            completed: false,
+            playedAt: Date(timeIntervalSince1970: 5_000)
+        )
+
+        XCTAssertEqual(
+            try store.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "Search", mediaType: .movie, limit: 10)
+            ).map(\.summary.id),
+            [olderMovie.id, newerMovie.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(
+                query: PersistedMediaSearchQuery(
+                    text: "Search",
+                    availability: .available,
+                    sort: .title,
+                    limit: 10
+                )
+            ).map(\.summary.id),
+            [olderMovie.id, newerMovie.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(
+                query: PersistedMediaSearchQuery(
+                    text: "Search",
+                    availability: .unavailable,
+                    sort: .title,
+                    limit: 10
+                )
+            ).map(\.summary.id),
+            [unavailableEpisode.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "", sort: .recentlyAdded, limit: 10)
+            ).map(\.summary.id),
+            [unavailableEpisode.id, newerMovie.id, olderMovie.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "", sort: .recentlyPlayed, limit: 10)
+            ).map(\.summary.id),
+            [newerMovie.id, olderMovie.id, unavailableEpisode.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "", sort: .year, limit: 10)
+            ).map(\.summary.id),
+            [newerMovie.id, olderMovie.id, unavailableEpisode.id]
+        )
+    }
+
+    func testSearchMediaItemsPaginatesAndNormalizesBounds() throws {
+        let store = try makeStore()
+        let first = MediaItem(id: "search-page-a", mediaType: .movie, title: "Alpha")
+        let second = MediaItem(id: "search-page-b", mediaType: .movie, title: "Beta")
+        let third = MediaItem(id: "search-page-c", mediaType: .movie, title: "Gamma")
+        try store.saveMediaItem(third)
+        try store.saveMediaItem(first)
+        try store.saveMediaItem(second)
+
+        XCTAssertEqual(
+            try store.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "", sort: .title, limit: 2)
+            ).map(\.summary.id),
+            [first.id, second.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "", sort: .title, limit: 10, offset: 1)
+            ).map(\.summary.id),
+            [second.id, third.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "", sort: .title, limit: 1, offset: -10)
+            ).map(\.summary.id),
+            [first.id]
+        )
+        XCTAssertEqual(
+            try store.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "Alpha", limit: 0)
+            ),
+            []
         )
     }
 
@@ -2233,6 +2532,7 @@ final class PersistenceRepositoryTests: XCTestCase {
     }
 
     private func removeV4SchemaObjects() throws {
+        try removeV5SchemaObjects()
         try RawSQLiteFixture.execute(
             path: databaseURL.path,
             sql: """
@@ -2241,6 +2541,22 @@ final class PersistenceRepositoryTests: XCTestCase {
                 DROP INDEX IF EXISTS idx_subtitle_assets_media_item_id;
                 DROP TABLE IF EXISTS subtitle_assets;
                 DELETE FROM schema_migrations WHERE version = 4;
+                """
+        )
+    }
+
+    private func removeV5SchemaObjects() throws {
+        try RawSQLiteFixture.execute(
+            path: databaseURL.path,
+            sql: """
+                DROP TRIGGER IF EXISTS media_search_metadata_items_ad;
+                DROP TRIGGER IF EXISTS media_search_metadata_items_au;
+                DROP TRIGGER IF EXISTS media_search_metadata_items_ai;
+                DROP TRIGGER IF EXISTS media_search_media_items_ad;
+                DROP TRIGGER IF EXISTS media_search_media_items_au;
+                DROP TRIGGER IF EXISTS media_search_media_items_ai;
+                DROP TABLE IF EXISTS media_search_fts;
+                DELETE FROM schema_migrations WHERE version = 5;
                 """
         )
     }

@@ -27,6 +27,10 @@ internal enum SQLiteMigrator {
                 try apply(version: 4, statements: version4Statements, connection: connection)
                 applied.insert(4)
             }
+            if !applied.contains(5) {
+                try apply(version: 5, statements: version5Statements, connection: connection)
+                applied.insert(5)
+            }
         } catch {
             throw PersistenceError.migrationFailed(error.localizedDescription)
         }
@@ -330,6 +334,247 @@ internal enum SQLiteMigrator {
         """
         CREATE INDEX IF NOT EXISTS idx_subtitle_assets_library_path
         ON subtitle_assets(library_folder_id, relative_path)
+        """
+    ]
+
+    private static let version5Statements = [
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS media_search_fts USING fts5(
+            media_item_id UNINDEXED,
+            title,
+            original_title,
+            series_title,
+            episode_title,
+            metadata_title,
+            metadata_original_title,
+            metadata_summary,
+            year,
+            tokenize = 'unicode61'
+        )
+        """,
+        """
+        INSERT INTO media_search_fts (
+            media_item_id,
+            title,
+            original_title,
+            series_title,
+            episode_title,
+            metadata_title,
+            metadata_original_title,
+            metadata_summary,
+            year
+        )
+        SELECT media_items.id,
+               media_items.title,
+               NULL,
+               media_items.series_title,
+               media_items.episode_title,
+               metadata_items.title,
+               metadata_items.original_title,
+               metadata_items.summary,
+               CAST(media_items.year AS TEXT)
+        FROM media_items
+        LEFT JOIN metadata_items
+          ON metadata_items.media_item_id = media_items.id
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS media_search_media_items_ai
+        AFTER INSERT ON media_items
+        BEGIN
+            DELETE FROM media_search_fts
+            WHERE media_item_id = new.id;
+
+            INSERT INTO media_search_fts (
+                media_item_id,
+                title,
+                original_title,
+                series_title,
+                episode_title,
+                metadata_title,
+                metadata_original_title,
+                metadata_summary,
+                year
+            )
+            SELECT media_items.id,
+                   media_items.title,
+                   NULL,
+                   media_items.series_title,
+                   media_items.episode_title,
+                   metadata_items.title,
+                   metadata_items.original_title,
+                   metadata_items.summary,
+                   CAST(media_items.year AS TEXT)
+            FROM media_items
+            LEFT JOIN metadata_items
+              ON metadata_items.media_item_id = media_items.id
+            WHERE media_items.id = new.id;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS media_search_media_items_au
+        AFTER UPDATE ON media_items
+        BEGIN
+            DELETE FROM media_search_fts
+            WHERE media_item_id = old.id;
+
+            INSERT INTO media_search_fts (
+                media_item_id,
+                title,
+                original_title,
+                series_title,
+                episode_title,
+                metadata_title,
+                metadata_original_title,
+                metadata_summary,
+                year
+            )
+            SELECT media_items.id,
+                   media_items.title,
+                   NULL,
+                   media_items.series_title,
+                   media_items.episode_title,
+                   metadata_items.title,
+                   metadata_items.original_title,
+                   metadata_items.summary,
+                   CAST(media_items.year AS TEXT)
+            FROM media_items
+            LEFT JOIN metadata_items
+              ON metadata_items.media_item_id = media_items.id
+            WHERE media_items.id = new.id;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS media_search_media_items_ad
+        AFTER DELETE ON media_items
+        BEGIN
+            DELETE FROM media_search_fts
+            WHERE media_item_id = old.id;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS media_search_metadata_items_ai
+        AFTER INSERT ON metadata_items
+        BEGIN
+            DELETE FROM media_search_fts
+            WHERE media_item_id = new.media_item_id;
+
+            INSERT INTO media_search_fts (
+                media_item_id,
+                title,
+                original_title,
+                series_title,
+                episode_title,
+                metadata_title,
+                metadata_original_title,
+                metadata_summary,
+                year
+            )
+            SELECT media_items.id,
+                   media_items.title,
+                   NULL,
+                   media_items.series_title,
+                   media_items.episode_title,
+                   metadata_items.title,
+                   metadata_items.original_title,
+                   metadata_items.summary,
+                   CAST(media_items.year AS TEXT)
+            FROM media_items
+            LEFT JOIN metadata_items
+              ON metadata_items.media_item_id = media_items.id
+            WHERE media_items.id = new.media_item_id;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS media_search_metadata_items_au
+        AFTER UPDATE ON metadata_items
+        BEGIN
+            DELETE FROM media_search_fts
+            WHERE media_item_id = old.media_item_id;
+
+            INSERT INTO media_search_fts (
+                media_item_id,
+                title,
+                original_title,
+                series_title,
+                episode_title,
+                metadata_title,
+                metadata_original_title,
+                metadata_summary,
+                year
+            )
+            SELECT media_items.id,
+                   media_items.title,
+                   NULL,
+                   media_items.series_title,
+                   media_items.episode_title,
+                   metadata_items.title,
+                   metadata_items.original_title,
+                   metadata_items.summary,
+                   CAST(media_items.year AS TEXT)
+            FROM media_items
+            LEFT JOIN metadata_items
+              ON metadata_items.media_item_id = media_items.id
+            WHERE media_items.id = old.media_item_id;
+
+            DELETE FROM media_search_fts
+            WHERE media_item_id = new.media_item_id;
+
+            INSERT INTO media_search_fts (
+                media_item_id,
+                title,
+                original_title,
+                series_title,
+                episode_title,
+                metadata_title,
+                metadata_original_title,
+                metadata_summary,
+                year
+            )
+            SELECT media_items.id,
+                   media_items.title,
+                   NULL,
+                   media_items.series_title,
+                   media_items.episode_title,
+                   metadata_items.title,
+                   metadata_items.original_title,
+                   metadata_items.summary,
+                   CAST(media_items.year AS TEXT)
+            FROM media_items
+            LEFT JOIN metadata_items
+              ON metadata_items.media_item_id = media_items.id
+            WHERE media_items.id = new.media_item_id;
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS media_search_metadata_items_ad
+        AFTER DELETE ON metadata_items
+        BEGIN
+            DELETE FROM media_search_fts
+            WHERE media_item_id = old.media_item_id;
+
+            INSERT INTO media_search_fts (
+                media_item_id,
+                title,
+                original_title,
+                series_title,
+                episode_title,
+                metadata_title,
+                metadata_original_title,
+                metadata_summary,
+                year
+            )
+            SELECT media_items.id,
+                   media_items.title,
+                   NULL,
+                   media_items.series_title,
+                   media_items.episode_title,
+                   NULL,
+                   NULL,
+                   NULL,
+                   CAST(media_items.year AS TEXT)
+            FROM media_items
+            WHERE media_items.id = old.media_item_id;
+        END
         """
     ]
 }

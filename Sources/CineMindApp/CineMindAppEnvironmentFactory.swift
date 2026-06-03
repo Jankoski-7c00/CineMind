@@ -47,6 +47,7 @@ enum CineMindAppEnvironmentFactory {
         let store = try CineMindStore(path: databaseURL.path)
         _ = try store.ensureLibrary(name: "CineMind Library")
         let mediaSummaryBrowser = LibraryMediaSummaryUseCase(store: store)
+        let mediaSearcher = LibraryMediaSearchUseCase(store: store)
         let itemDetailBrowser = LibraryItemDetailUseCase(store: store)
         let folderSummaryBrowser = LibraryFolderSummaryUseCase(store: store)
         let folderPicker = AppKitLibraryFolderPicker()
@@ -65,6 +66,7 @@ enum CineMindAppEnvironmentFactory {
         )
         let appShellEnvironment = AppShellEnvironment(
             mediaSummaryBrowser: mediaSummaryBrowser,
+            mediaSearcher: mediaSearcher,
             itemDetailBrowser: itemDetailBrowser,
             folderSummaryBrowser: folderSummaryBrowser,
             folderPicker: folderPicker,

@@ -24,7 +24,7 @@ public struct LibraryBrowserView: View {
                 endPoint: .bottom
             )
         }
-        .task(id: viewModel.selectedSection) {
+        .task(id: viewModel.loadTrigger) {
             await viewModel.load()
         }
     }
@@ -71,6 +71,8 @@ public struct LibraryBrowserView: View {
                 }
             }
 
+            searchControls
+
             if let workflowErrorMessage = viewModel.workflowErrorMessage {
                 Text(workflowErrorMessage)
                     .font(.callout)
@@ -105,6 +107,13 @@ public struct LibraryBrowserView: View {
     }
 
     private var browserSubtitle: String {
+        if viewModel.isSearchActive {
+            if let resultDescription = viewModel.searchSnapshot?.resultDescription {
+                return resultDescription
+            }
+            return "Search results"
+        }
+
         if viewModel.selectedSection == .folders {
             if let count = viewModel.folderSnapshot?.folders.count {
                 return count == 1 ? "1 folder" : "\(count) folders"
@@ -117,6 +126,98 @@ public struct LibraryBrowserView: View {
         }
 
         return "Local library"
+    }
+
+    private var searchControls: some View {
+        LiquidGlassPanel(
+            cornerRadius: 14,
+            material: .thinMaterial,
+            padding: EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+        ) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    searchField
+                        .frame(minWidth: 220)
+                    mediaTypePicker
+                        .frame(width: 190)
+                    availabilityPicker
+                        .frame(width: 130)
+                    sortPicker
+                        .frame(width: 170)
+                    clearSearchButton
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        searchField
+                        clearSearchButton
+                    }
+                    HStack(spacing: 8) {
+                        mediaTypePicker
+                        availabilityPicker
+                        sortPicker
+                    }
+                }
+            }
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search Library", text: $viewModel.searchText)
+                .textFieldStyle(.plain)
+        }
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var mediaTypePicker: some View {
+        Picker("Type", selection: $viewModel.searchMediaTypeFilter) {
+            Text("All").tag(LibrarySearchMediaTypeFilter.all)
+            Text("Movies").tag(LibrarySearchMediaTypeFilter.movies)
+            Text("TV").tag(LibrarySearchMediaTypeFilter.tvEpisodes)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
+
+    private var availabilityPicker: some View {
+        Picker("Availability", selection: $viewModel.searchAvailabilityFilter) {
+            Text("Any").tag(LibrarySearchAvailabilityFilter.any)
+            Text("Available").tag(LibrarySearchAvailabilityFilter.available)
+            Text("Missing").tag(LibrarySearchAvailabilityFilter.unavailable)
+        }
+        .pickerStyle(.menu)
+    }
+
+    private var sortPicker: some View {
+        Picker("Sort", selection: $viewModel.searchSort) {
+            Text("Relevance").tag(LibrarySearchSort.relevance)
+            Text("Title").tag(LibrarySearchSort.title)
+            Text("Recently Added").tag(LibrarySearchSort.recentlyAdded)
+            Text("Recently Played").tag(LibrarySearchSort.recentlyPlayed)
+            Text("Year").tag(LibrarySearchSort.year)
+        }
+        .pickerStyle(.menu)
+    }
+
+    @ViewBuilder
+    private var clearSearchButton: some View {
+        if viewModel.isSearchActive {
+            Button {
+                viewModel.clearSearch()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Clear search")
+            .frame(width: 24, height: 24)
+        }
     }
 
     @ViewBuilder
@@ -139,15 +240,23 @@ public struct LibraryBrowserView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let errorMessage = viewModel.errorMessage {
             errorContent(message: errorMessage)
-        } else if viewModel.selectedSection == .folders,
+        } else if !viewModel.isSearchActive,
+                  viewModel.selectedSection == .folders,
                   let folderSnapshot = viewModel.folderSnapshot,
                   !folderSnapshot.folders.isEmpty {
             folderTableContent(folders: folderSnapshot.folders)
-        } else if let snapshot = viewModel.snapshot, !snapshot.items.isEmpty {
-            mediaTableContent(items: snapshot.items)
+        } else if let items = displayedMediaItems, !items.isEmpty {
+            mediaTableContent(items: items)
         } else {
             emptyContent
         }
+    }
+
+    private var displayedMediaItems: [LibraryItemSummary]? {
+        if viewModel.isSearchActive {
+            return viewModel.searchSnapshot?.items
+        }
+        return viewModel.snapshot?.items
     }
 
     private func scanResultSummary(_ result: LibraryScanResultSummary) -> some View {
@@ -161,29 +270,59 @@ public struct LibraryBrowserView: View {
     private var emptyContent: some View {
         LiquidGlassCard {
             VStack(spacing: 12) {
-                Image(systemName: viewModel.selectedSection == .folders ? "folder" : "film.stack")
+                Image(systemName: emptyStateIconName)
                     .font(.system(size: 34, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.72))
 
-                Text(viewModel.selectedSection == .folders ? "No folders yet" : "No media yet")
+                Text(emptyStateTitle)
                     .cinemindSectionTitleStyle()
 
-                Text("Add a folder to start building your library.")
+                Text(emptyStateMessage)
                     .font(.callout)
                     .cinemindSecondaryTextStyle()
                     .multilineTextAlignment(.center)
 
-                Button {
-                    Task { await viewModel.addFolder() }
-                } label: {
-                    Label("Add Folder", systemImage: "folder.badge.plus")
+                if viewModel.isSearchActive {
+                    Button {
+                        viewModel.clearSearch()
+                    } label: {
+                        Label("Clear Search", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.liquidGlass)
+                } else {
+                    Button {
+                        Task { await viewModel.addFolder() }
+                    } label: {
+                        Label("Add Folder", systemImage: "folder.badge.plus")
+                    }
+                    .buttonStyle(.liquidGlassPrimary)
+                    .disabled(workflowIsBusy)
                 }
-                .buttonStyle(.liquidGlassPrimary)
-                .disabled(workflowIsBusy)
             }
             .frame(maxWidth: 340)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyStateIconName: String {
+        if viewModel.isSearchActive {
+            return "magnifyingglass"
+        }
+        return viewModel.selectedSection == .folders ? "folder" : "film.stack"
+    }
+
+    private var emptyStateTitle: String {
+        if viewModel.isSearchActive {
+            return "No matches"
+        }
+        return viewModel.selectedSection == .folders ? "No folders yet" : "No media yet"
+    }
+
+    private var emptyStateMessage: String {
+        if viewModel.isSearchActive {
+            return "Try a different search or filter."
+        }
+        return "Add a folder to start building your library."
     }
 
     private func errorContent(message: String) -> some View {

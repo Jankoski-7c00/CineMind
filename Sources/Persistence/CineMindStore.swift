@@ -43,6 +43,7 @@ extension CineMindStore {
             FROM sqlite_master
             WHERE type = 'table'
               AND name NOT LIKE 'sqlite_%'
+              AND name NOT GLOB 'media_search_fts_*'
             ORDER BY name ASC
             """)
 

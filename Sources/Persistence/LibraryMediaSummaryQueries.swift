@@ -94,7 +94,7 @@ extension CineMindStore {
         return summaries
     }
 
-    private func mapMediaItemSummary(_ statement: SQLiteStatement) throws -> PersistedMediaItemSummary {
+    internal func mapMediaItemSummary(_ statement: SQLiteStatement) throws -> PersistedMediaItemSummary {
         PersistedMediaItemSummary(
             id: try requiredSummaryString(statement, 0),
             mediaType: try requiredSummaryMediaType(statement, 1),
@@ -114,7 +114,7 @@ extension CineMindStore {
     }
 }
 
-private let mediaItemTitleOrderSQL = """
+internal let mediaItemTitleOrderSQL = """
     ORDER BY media_items.title COLLATE NOCASE ASC,
              media_items.id ASC
     """
@@ -124,9 +124,20 @@ private let mediaItemRecentlyPlayedOrderSQL = """
              media_items.id ASC
     """
 
-private func mediaItemSummarySQL(whereClause: String, orderClause: String) -> String {
+internal func mediaItemSummarySQL(whereClause: String, orderClause: String) -> String {
     """
-    WITH file_counts AS (
+    WITH \(mediaItemSummaryCommonCTESQL)
+    SELECT \(mediaItemSummarySelectColumnsSQL)
+    FROM media_items
+    \(mediaItemSummaryJoinSQL)
+    \(whereClause)
+    \(orderClause)
+    LIMIT ? OFFSET ?
+    """
+}
+
+internal let mediaItemSummaryCommonCTESQL = """
+    file_counts AS (
         SELECT media_files.media_item_id,
                COUNT(*) AS total_file_count,
                SUM(
@@ -164,7 +175,10 @@ private func mediaItemSummarySQL(whereClause: String, orderClause: String) -> St
                1 AS has_metadata_source_record
         FROM metadata_source_records
     )
-    SELECT media_items.id,
+    """
+
+internal let mediaItemSummarySelectColumnsSQL = """
+    media_items.id,
            media_items.media_type,
            media_items.title,
            media_items.year,
@@ -178,7 +192,9 @@ private func mediaItemSummarySQL(whereClause: String, orderClause: String) -> St
            COALESCE(metadata_item_presence.has_metadata_item, 0) AS has_metadata_item,
            COALESCE(metadata_source_presence.has_metadata_source_record, 0) AS has_metadata_source_record,
            latest_playback.latest_played_at
-    FROM media_items
+    """
+
+internal let mediaItemSummaryJoinSQL = """
     LEFT JOIN file_counts
       ON file_counts.media_item_id = media_items.id
     LEFT JOIN latest_playback
@@ -187,34 +203,30 @@ private func mediaItemSummarySQL(whereClause: String, orderClause: String) -> St
       ON metadata_item_presence.media_item_id = media_items.id
     LEFT JOIN metadata_source_presence
       ON metadata_source_presence.media_item_id = media_items.id
-    \(whereClause)
-    \(orderClause)
-    LIMIT ? OFFSET ?
     """
-}
 
-private func requiredSummaryString(_ statement: SQLiteStatement, _ index: Int32) throws -> String {
+internal func requiredSummaryString(_ statement: SQLiteStatement, _ index: Int32) throws -> String {
     guard let value = statement.string(at: index) else {
         throw PersistenceError.stepFailed("expected string at column \(index)")
     }
     return value
 }
 
-private func requiredSummaryInt(_ statement: SQLiteStatement, _ index: Int32) throws -> Int {
+internal func requiredSummaryInt(_ statement: SQLiteStatement, _ index: Int32) throws -> Int {
     guard let value = statement.int(at: index) else {
         throw PersistenceError.stepFailed("expected int at column \(index)")
     }
     return value
 }
 
-private func requiredSummaryBool(_ statement: SQLiteStatement, _ index: Int32) throws -> Bool {
+internal func requiredSummaryBool(_ statement: SQLiteStatement, _ index: Int32) throws -> Bool {
     guard let value = statement.int(at: index), value == 0 || value == 1 else {
         throw PersistenceError.stepFailed("expected bool 0/1 at column \(index)")
     }
     return value == 1
 }
 
-private func requiredSummaryMediaType(
+internal func requiredSummaryMediaType(
     _ statement: SQLiteStatement,
     _ index: Int32
 ) throws -> MediaType {

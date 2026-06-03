@@ -5,7 +5,32 @@ import SwiftUI
 @MainActor
 public final class LibraryBrowserViewModel: ObservableObject {
     @Published public var selectedSection: LibraryBrowserSection = .library
+    @Published public var searchText = "" {
+        didSet {
+            guard oldValue != searchText else { return }
+            selectedItemID = nil
+        }
+    }
+    @Published public var searchMediaTypeFilter: LibrarySearchMediaTypeFilter = .all {
+        didSet {
+            guard oldValue != searchMediaTypeFilter else { return }
+            selectedItemID = nil
+        }
+    }
+    @Published public var searchAvailabilityFilter: LibrarySearchAvailabilityFilter = .any {
+        didSet {
+            guard oldValue != searchAvailabilityFilter else { return }
+            selectedItemID = nil
+        }
+    }
+    @Published public var searchSort: LibrarySearchSort = .relevance {
+        didSet {
+            guard oldValue != searchSort else { return }
+            selectedItemID = nil
+        }
+    }
     @Published public private(set) var snapshot: LibraryMediaSummarySnapshot?
+    @Published public private(set) var searchSnapshot: LibrarySearchSnapshot?
     @Published public private(set) var folderSnapshot: LibraryFolderSummarySnapshot?
     @Published public private(set) var isLoading = false
     @Published public private(set) var isAddingFolder = false
@@ -17,6 +42,7 @@ public final class LibraryBrowserViewModel: ObservableObject {
     @Published public var selectedItemID: MediaItemID?
 
     private let mediaSummaryBrowser: any LibraryMediaSummaryBrowsing
+    private let mediaSearcher: any LibraryMediaSearching
     private let folderSummaryBrowser: any LibraryFolderSummaryBrowsing
     private let folderPicker: any LibraryFolderPicking
     private let folderAdder: any LibraryFolderAdding
@@ -26,6 +52,7 @@ public final class LibraryBrowserViewModel: ObservableObject {
 
     public init(
         mediaSummaryBrowser: any LibraryMediaSummaryBrowsing,
+        mediaSearcher: any LibraryMediaSearching,
         folderSummaryBrowser: any LibraryFolderSummaryBrowsing,
         folderPicker: any LibraryFolderPicking,
         folderAdder: any LibraryFolderAdding,
@@ -33,6 +60,7 @@ public final class LibraryBrowserViewModel: ObservableObject {
         reloadSelectedItemDetail: @escaping @MainActor (MediaItemID) async -> Void = { _ in }
     ) {
         self.mediaSummaryBrowser = mediaSummaryBrowser
+        self.mediaSearcher = mediaSearcher
         self.folderSummaryBrowser = folderSummaryBrowser
         self.folderPicker = folderPicker
         self.folderAdder = folderAdder
@@ -45,6 +73,9 @@ public final class LibraryBrowserViewModel: ObservableObject {
         selectedSection = section
         selectedItemID = nil
         snapshot = nil
+        if !isSearchActive {
+            searchSnapshot = nil
+        }
         folderSnapshot = nil
         errorMessage = nil
     }
@@ -60,35 +91,85 @@ public final class LibraryBrowserViewModel: ObservableObject {
     private func loadCurrentSection() async {
         loadGeneration += 1
         let generation = loadGeneration
-        let section = selectedSection
+        let trigger = loadTrigger
 
         isLoading = true
         errorMessage = nil
 
         do {
             let page = LibraryBrowserPage(limit: 50, offset: 0)
-            switch section {
-            case .library, .movies, .tvEpisodes, .recentlyPlayed, .needsMetadata:
-                let result = try await mediaSummaryBrowser.browse(section: section, page: page)
-                guard canApplyLoadResult(section: section, generation: generation) else { return }
-                snapshot = result
+            if trigger.isSearchActive {
+                let result = try await mediaSearcher.search(searchRequest(trigger: trigger, page: page))
+                guard canApplyLoadResult(trigger: trigger, generation: generation) else { return }
+                searchSnapshot = result
                 folderSnapshot = nil
-            case .folders:
-                let result = try await folderSummaryBrowser.browseFolders(page: page)
-                guard canApplyLoadResult(section: section, generation: generation) else { return }
-                snapshot = nil
-                folderSnapshot = result
+            } else {
+                switch trigger.section {
+                case .library, .movies, .tvEpisodes, .recentlyPlayed, .needsMetadata:
+                    let result = try await mediaSummaryBrowser.browse(section: trigger.section, page: page)
+                    guard canApplyLoadResult(trigger: trigger, generation: generation) else { return }
+                    snapshot = result
+                    searchSnapshot = nil
+                    folderSnapshot = nil
+                case .folders:
+                    let result = try await folderSummaryBrowser.browseFolders(page: page)
+                    guard canApplyLoadResult(trigger: trigger, generation: generation) else { return }
+                    snapshot = nil
+                    searchSnapshot = nil
+                    folderSnapshot = result
+                }
             }
             isLoading = false
         } catch {
-            guard canApplyLoadResult(section: section, generation: generation) else { return }
+            guard canApplyLoadResult(trigger: trigger, generation: generation) else { return }
             errorMessage = error.localizedDescription
             isLoading = false
         }
     }
 
-    private func canApplyLoadResult(section: LibraryBrowserSection, generation: Int) -> Bool {
-        selectedSection == section && loadGeneration == generation
+    var loadTrigger: LibraryBrowserLoadTrigger {
+        LibraryBrowserLoadTrigger(
+            section: selectedSection,
+            searchText: searchText,
+            mediaType: searchMediaTypeFilter,
+            availability: searchAvailabilityFilter,
+            sort: searchSort,
+            isSearchActive: isSearchActive
+        )
+    }
+
+    public var isSearchActive: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || searchMediaTypeFilter != .all
+            || searchAvailabilityFilter != .any
+            || searchSort != .relevance
+    }
+
+    public func clearSearch() {
+        searchText = ""
+        searchMediaTypeFilter = .all
+        searchAvailabilityFilter = .any
+        searchSort = .relevance
+        selectedItemID = nil
+        searchSnapshot = nil
+        errorMessage = nil
+    }
+
+    private func searchRequest(
+        trigger: LibraryBrowserLoadTrigger,
+        page: LibraryBrowserPage
+    ) -> LibrarySearchRequest {
+        LibrarySearchRequest(
+            text: trigger.searchText,
+            mediaType: trigger.mediaType,
+            availability: trigger.availability,
+            sort: trigger.sort,
+            page: page
+        )
+    }
+
+    private func canApplyLoadResult(trigger: LibraryBrowserLoadTrigger, generation: Int) -> Bool {
+        loadTrigger == trigger && loadGeneration == generation
     }
 
     public func addFolder() async {
@@ -151,4 +232,13 @@ public final class LibraryBrowserViewModel: ObservableObject {
             workflowErrorMessage = error.localizedDescription
         }
     }
+}
+
+struct LibraryBrowserLoadTrigger: Equatable {
+    let section: LibraryBrowserSection
+    let searchText: String
+    let mediaType: LibrarySearchMediaTypeFilter
+    let availability: LibrarySearchAvailabilityFilter
+    let sort: LibrarySearchSort
+    let isSearchActive: Bool
 }

@@ -103,7 +103,7 @@ extension CineMindStore: ApplicationLibraryMediaSummaryStore {}
 public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable {
     private let store: any ApplicationLibraryMediaSummaryStore
     private let queue: DispatchQueue
-    private let lastPlayedLabel: @Sendable (Date) -> String
+    private let itemMapper: LibraryItemSummaryMapper
 
     public init(
         store: any ApplicationLibraryMediaSummaryStore,
@@ -123,7 +123,7 @@ public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable 
     ) {
         self.store = store
         self.queue = DispatchQueue(label: queueLabel)
-        self.lastPlayedLabel = lastPlayedLabel
+        self.itemMapper = LibraryItemSummaryMapper(lastPlayedLabel: lastPlayedLabel)
     }
 
     public func browse(
@@ -179,6 +179,22 @@ public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable 
     }
 
     private func map(_ summary: PersistedMediaItemSummary) -> LibraryItemSummary {
+        itemMapper.map(summary)
+    }
+
+    private static func defaultLastPlayedLabel(_ date: Date) -> String {
+        LibraryBrowserDateLabel.format(date)
+    }
+}
+
+struct LibraryItemSummaryMapper {
+    private let lastPlayedLabel: @Sendable (Date) -> String
+
+    init(lastPlayedLabel: @escaping @Sendable (Date) -> String) {
+        self.lastPlayedLabel = lastPlayedLabel
+    }
+
+    func map(_ summary: PersistedMediaItemSummary) -> LibraryItemSummary {
         LibraryItemSummary(
             id: summary.id,
             displayTitle: displayTitle(for: summary),
@@ -256,10 +272,6 @@ public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable 
         case (false, false):
             "missing"
         }
-    }
-
-    private static func defaultLastPlayedLabel(_ date: Date) -> String {
-        LibraryBrowserDateLabel.format(date)
     }
 }
 

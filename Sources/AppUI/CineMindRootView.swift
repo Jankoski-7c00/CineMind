@@ -89,6 +89,7 @@ fileprivate struct ReadyShellView: View {
         _browserViewModel = StateObject(wrappedValue:
             LibraryBrowserViewModel(
                 mediaSummaryBrowser: environment.mediaSummaryBrowser,
+                mediaSearcher: environment.mediaSearcher,
                 folderSummaryBrowser: environment.folderSummaryBrowser,
                 folderPicker: environment.folderPicker,
                 folderAdder: environment.folderAdder,
