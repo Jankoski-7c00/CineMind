@@ -14,6 +14,8 @@ public typealias MetadataExternalIDID = String
 public typealias MetadataSourceRecordID = String
 public typealias PosterAssetID = String
 public typealias SubtitleAssetID = String
+public typealias TagID = String
+public typealias CollectionID = String
 
 public enum DomainID {
     public static func new() -> String {
@@ -31,6 +33,19 @@ public enum MediaTitleNormalizer {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
             .lowercased()
+    }
+}
+
+public enum CurationNameNormalizer {
+    public static func displayName(_ value: String) -> String {
+        value
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    public static func normalize(_ value: String) -> String {
+        displayName(value).lowercased()
     }
 }
 
@@ -155,6 +170,12 @@ public enum SubtitleFormat: String, Codable, Sendable, Equatable, CaseIterable {
     }
 }
 
+public enum TagSource: String, Codable, Sendable, Equatable, CaseIterable {
+    case manual
+    case aiSuggested = "ai_suggested"
+    case imported
+}
+
 public enum DomainValidationError: Error, Sendable, Equatable {
     case emptySeriesTitle
     case invalidSeasonNumber(Int)
@@ -169,6 +190,10 @@ public enum DomainValidationError: Error, Sendable, Equatable {
     case emptyPosterPreferredCacheSize
     case invalidPosterWidth(Int)
     case invalidPosterHeight(Int)
+    case emptyTagName
+    case emptyCollectionName
+    case emptyNormalizedTagName
+    case emptyNormalizedCollectionName
 }
 
 public struct Library: Codable, Sendable, Equatable {
@@ -305,6 +330,202 @@ public struct MediaItem: Codable, Sendable, Equatable {
         self.year = year
         self.episodeInfo = episodeInfo
         self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct Tag: Codable, Sendable, Equatable {
+    public var id: TagID
+    public var name: String
+    public var normalizedName: String
+    public var source: TagSource
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: TagID = DomainID.new(),
+        name: String,
+        normalizedName: String? = nil,
+        source: TagSource = .manual,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        let displayName = CurationNameNormalizer.displayName(name)
+        let normalized = CurationNameNormalizer.normalize(normalizedName ?? displayName)
+        precondition(!displayName.isEmpty, "tag name must not be empty")
+        precondition(!normalized.isEmpty, "normalized tag name must not be empty")
+
+        self.id = id
+        self.name = displayName
+        self.normalizedName = normalized
+        self.source = source
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public static func validated(
+        id: TagID = DomainID.new(),
+        name: String,
+        normalizedName: String? = nil,
+        source: TagSource = .manual,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) throws -> Tag {
+        let displayName = CurationNameNormalizer.displayName(name)
+        guard !displayName.isEmpty else {
+            throw DomainValidationError.emptyTagName
+        }
+
+        let normalized = CurationNameNormalizer.normalize(normalizedName ?? displayName)
+        guard !normalized.isEmpty else {
+            throw DomainValidationError.emptyNormalizedTagName
+        }
+
+        return Tag(
+            id: id,
+            name: displayName,
+            normalizedName: normalized,
+            source: source,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    public func validate() throws {
+        guard !CurationNameNormalizer.displayName(name).isEmpty else {
+            throw DomainValidationError.emptyTagName
+        }
+        guard !CurationNameNormalizer.normalize(normalizedName).isEmpty else {
+            throw DomainValidationError.emptyNormalizedTagName
+        }
+    }
+}
+
+public struct MediaItemTag: Codable, Sendable, Equatable {
+    public var mediaItemID: MediaItemID
+    public var tagID: TagID
+    public var assignedAt: Date
+    public var updatedAt: Date
+
+    public init(
+        mediaItemID: MediaItemID,
+        tagID: TagID,
+        assignedAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        precondition(!mediaItemID.isEmpty, "mediaItemID must not be empty")
+        precondition(!tagID.isEmpty, "tagID must not be empty")
+
+        self.mediaItemID = mediaItemID
+        self.tagID = tagID
+        self.assignedAt = assignedAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct FavoriteMediaItem: Codable, Sendable, Equatable {
+    public var mediaItemID: MediaItemID
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        mediaItemID: MediaItemID,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        precondition(!mediaItemID.isEmpty, "mediaItemID must not be empty")
+
+        self.mediaItemID = mediaItemID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct MediaCollection: Codable, Sendable, Equatable {
+    public var id: CollectionID
+    public var name: String
+    public var normalizedName: String
+    public var description: String?
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: CollectionID = DomainID.new(),
+        name: String,
+        normalizedName: String? = nil,
+        description: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        let displayName = CurationNameNormalizer.displayName(name)
+        let normalized = CurationNameNormalizer.normalize(normalizedName ?? displayName)
+        precondition(!displayName.isEmpty, "collection name must not be empty")
+        precondition(!normalized.isEmpty, "normalized collection name must not be empty")
+
+        self.id = id
+        self.name = displayName
+        self.normalizedName = normalized
+        self.description = description?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public static func validated(
+        id: CollectionID = DomainID.new(),
+        name: String,
+        normalizedName: String? = nil,
+        description: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) throws -> MediaCollection {
+        let displayName = CurationNameNormalizer.displayName(name)
+        guard !displayName.isEmpty else {
+            throw DomainValidationError.emptyCollectionName
+        }
+
+        let normalized = CurationNameNormalizer.normalize(normalizedName ?? displayName)
+        guard !normalized.isEmpty else {
+            throw DomainValidationError.emptyNormalizedCollectionName
+        }
+
+        return MediaCollection(
+            id: id,
+            name: displayName,
+            normalizedName: normalized,
+            description: description,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    public func validate() throws {
+        guard !CurationNameNormalizer.displayName(name).isEmpty else {
+            throw DomainValidationError.emptyCollectionName
+        }
+        guard !CurationNameNormalizer.normalize(normalizedName).isEmpty else {
+            throw DomainValidationError.emptyNormalizedCollectionName
+        }
+    }
+}
+
+public struct CollectionItem: Codable, Sendable, Equatable {
+    public var collectionID: CollectionID
+    public var mediaItemID: MediaItemID
+    public var addedAt: Date
+    public var updatedAt: Date
+
+    public init(
+        collectionID: CollectionID,
+        mediaItemID: MediaItemID,
+        addedAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        precondition(!collectionID.isEmpty, "collectionID must not be empty")
+        precondition(!mediaItemID.isEmpty, "mediaItemID must not be empty")
+
+        self.collectionID = collectionID
+        self.mediaItemID = mediaItemID
+        self.addedAt = addedAt
         self.updatedAt = updatedAt
     }
 }

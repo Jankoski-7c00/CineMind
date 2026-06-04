@@ -29,7 +29,8 @@ final class LibraryItemDetailTests: XCTestCase {
                 .mediaDetail(itemID),
                 .metadataItem(itemID),
                 .metadataSource(itemID, .tmdb),
-                .posterAssets(itemID)
+                .posterAssets(itemID),
+                .curation(itemID)
             ]
         )
     }
@@ -52,6 +53,49 @@ final class LibraryItemDetailTests: XCTestCase {
         XCTAssertEqual(detail.metadataDetail.statusLabel, "partial")
         XCTAssertEqual(detail.metadataDetail.metadataTitle, "Metadata Arrival")
         XCTAssertNil(detail.metadataDetail.source)
+    }
+
+    func testCurationMapsFavoriteTagsAndCollections() async throws {
+        let itemID = "curated"
+        let store = RecordingLibraryItemDetailStore(
+            detail: makePersistedDetail(id: itemID),
+            curation: PersistedMediaItemCuration(
+                mediaItemID: itemID,
+                isFavorite: true,
+                tags: [
+                    PersistedTag(
+                        id: "tag-1",
+                        name: "Sci Fi",
+                        normalizedName: "sci fi",
+                        source: .manual,
+                        createdAt: Date(timeIntervalSince1970: 100),
+                        updatedAt: Date(timeIntervalSince1970: 100),
+                        mediaItemCount: 2
+                    )
+                ],
+                collections: [
+                    PersistedCollection(
+                        id: "collection-1",
+                        name: "Weekend",
+                        normalizedName: "weekend",
+                        description: "Friday",
+                        createdAt: Date(timeIntervalSince1970: 200),
+                        updatedAt: Date(timeIntervalSince1970: 200),
+                        mediaItemCount: 1
+                    )
+                ]
+            )
+        )
+        let useCase = LibraryItemDetailUseCase(store: store)
+
+        let result = try await useCase.fetchDetail(id: itemID)
+        let detail = try XCTUnwrap(result)
+
+        XCTAssertTrue(detail.curation.isFavorite)
+        XCTAssertEqual(detail.curation.tags.map(\.name), ["Sci Fi"])
+        XCTAssertEqual(detail.curation.tags.map(\.mediaItemCountLabel), ["2 items"])
+        XCTAssertEqual(detail.curation.collections.map(\.name), ["Weekend"])
+        XCTAssertEqual(detail.curation.collections.map(\.mediaItemCountLabel), ["1 item"])
     }
 
     func testSourceOnlyMapsPartialStatus() async throws {
@@ -428,6 +472,16 @@ final class LibraryItemDetailTests: XCTestCase {
                     .metadataSource(itemID, .tmdb),
                     .posterAssets(itemID)
                 ]
+            ),
+            (
+                .curation,
+                [
+                    .mediaDetail(itemID),
+                    .metadataItem(itemID),
+                    .metadataSource(itemID, .tmdb),
+                    .posterAssets(itemID),
+                    .curation(itemID)
+                ]
             )
         ]
 
@@ -539,18 +593,26 @@ private final class RecordingLibraryItemDetailStore: ApplicationLibraryItemDetai
     private let metadataItem: MetadataItem?
     private let sourceRecord: MetadataSourceRecord?
     private let posterAssets: [PosterAsset]
+    private let curation: PersistedMediaItemCuration
     var failures: Set<DetailStoreFailure> = []
 
     init(
         detail: PersistedMediaItemDetail?,
         metadataItem: MetadataItem? = nil,
         sourceRecord: MetadataSourceRecord? = nil,
-        posterAssets: [PosterAsset] = []
+        posterAssets: [PosterAsset] = [],
+        curation: PersistedMediaItemCuration? = nil
     ) {
         self.detail = detail
         self.metadataItem = metadataItem
         self.sourceRecord = sourceRecord
         self.posterAssets = posterAssets
+        self.curation = curation ?? PersistedMediaItemCuration(
+            mediaItemID: detail?.id ?? "",
+            isFavorite: false,
+            tags: [],
+            collections: []
+        )
     }
 
     var calls: [LibraryItemDetailStoreCall] {
@@ -582,6 +644,11 @@ private final class RecordingLibraryItemDetailStore: ApplicationLibraryItemDetai
         return posterAssets
     }
 
+    func fetchMediaItemCuration(mediaItemID: MediaItemID) throws -> PersistedMediaItemCuration {
+        try record(.curation(mediaItemID), failingWith: .curation)
+        return curation
+    }
+
     private func record(
         _ call: LibraryItemDetailStoreCall,
         failingWith failure: DetailStoreFailure
@@ -607,6 +674,7 @@ private enum LibraryItemDetailStoreCall: Equatable {
     case metadataItem(MediaItemID)
     case metadataSource(MediaItemID, MetadataProviderName)
     case posterAssets(MediaItemID)
+    case curation(MediaItemID)
 }
 
 private enum DetailStoreFailure: Error, Equatable, Hashable {
@@ -614,6 +682,7 @@ private enum DetailStoreFailure: Error, Equatable, Hashable {
     case metadataItem
     case metadataSource
     case posterAssets
+    case curation
 }
 
 private func makePersistedDetail(

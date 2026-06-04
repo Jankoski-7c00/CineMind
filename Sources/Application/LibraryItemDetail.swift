@@ -77,6 +77,7 @@ public struct LibraryItemDetailShell: Identifiable, Sendable, Equatable {
     public let metadataLabel: String
     public let lastPlayedLabel: String?
     public let files: [LibraryFileSummary]
+    public let curation: LibraryItemCurationDetail
     public let metadataDetail: LibraryMetadataDetail
     public let selectedPoster: LibrarySelectedPosterDetail
     public let posterAssets: [LibraryPosterAssetDetail]
@@ -94,6 +95,7 @@ public protocol ApplicationLibraryItemDetailStore: Sendable {
         provider: MetadataProviderName
     ) throws -> MetadataSourceRecord?
     func fetchPosterAssets(mediaItemID: MediaItemID) throws -> [PosterAsset]
+    func fetchMediaItemCuration(mediaItemID: MediaItemID) throws -> PersistedMediaItemCuration
 }
 
 extension CineMindStore: ApplicationLibraryItemDetailStore {}
@@ -150,12 +152,14 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
                         provider: .tmdb
                     )
                     let posterAssets = try store.fetchPosterAssets(mediaItemID: detail.id)
+                    let curation = try store.fetchMediaItemCuration(mediaItemID: detail.id)
                     continuation.resume(
                         returning: PersistedLibraryItemDetail(
                             detail: detail,
                             metadataItem: metadataItem,
                             sourceRecord: sourceRecord,
-                            posterAssets: posterAssets
+                            posterAssets: posterAssets,
+                            curation: curation
                         )
                     )
                 } catch {
@@ -183,6 +187,7 @@ public struct LibraryItemDetailUseCase: LibraryItemDetailBrowsing, Sendable {
             metadataLabel: metadataDetail.statusLabel,
             lastPlayedLabel: detail.latestPlayedAt.map(lastPlayedLabel),
             files: detail.files.map(mapFile),
+            curation: mapItemCuration(persisted.curation),
             metadataDetail: metadataDetail,
             selectedPoster: selectedPoster(
                 mediaItemID: detail.id,
@@ -493,6 +498,7 @@ private struct PersistedLibraryItemDetail {
     let metadataItem: MetadataItem?
     let sourceRecord: MetadataSourceRecord?
     let posterAssets: [PosterAsset]
+    let curation: PersistedMediaItemCuration
 }
 
 private extension String {

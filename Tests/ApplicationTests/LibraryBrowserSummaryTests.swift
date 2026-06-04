@@ -42,6 +42,25 @@ final class LibraryBrowserSummaryTests: XCTestCase {
         )
     }
 
+    func testSectionMappingFavoritesAndCollections() async throws {
+        let store = RecordingLibraryMediaSummaryStore()
+        let useCase = LibraryMediaSummaryUseCase(store: store)
+
+        _ = try await useCase.browse(section: .favorites, page: LibraryBrowserPage(limit: 10))
+        _ = try await useCase.browse(
+            section: .collection("collection-1"),
+            page: LibraryBrowserPage(limit: 5, offset: 2)
+        )
+
+        XCTAssertEqual(
+            store.calls,
+            [
+                .favorites(limit: 10, offset: 0),
+                .collection(collectionID: "collection-1", limit: 5, offset: 2)
+            ]
+        )
+    }
+
     func testFoldersSectionThrowsUnsupportedMediaSectionWithoutStoreCall() async throws {
         let store = RecordingLibraryMediaSummaryStore()
         let useCase = LibraryMediaSummaryUseCase(store: store)
@@ -315,6 +334,25 @@ final class LibraryBrowserSummaryTests: XCTestCase {
         XCTAssertEqual(items.map(\.lastPlayedLabel), ["played:1000", nil])
     }
 
+    func testCurationSummaryFieldsMapThroughBrowserItems() async throws {
+        let store = RecordingLibraryMediaSummaryStore(
+            summaries: [
+                makeSummary(
+                    id: "favorite",
+                    mediaType: .movie,
+                    isFavorite: true,
+                    tagLabels: ["Sci Fi", "Weekend"]
+                )
+            ]
+        )
+        let useCase = LibraryMediaSummaryUseCase(store: store)
+
+        let item = try await onlyItem(useCase)
+
+        XCTAssertTrue(item.isFavorite)
+        XCTAssertEqual(item.tagLabels, ["Sci Fi", "Weekend"])
+    }
+
     func testDefaultLastPlayedLabelIsDeterministic() async throws {
         let store = RecordingLibraryMediaSummaryStore(
             summaries: [
@@ -465,6 +503,21 @@ private final class RecordingLibraryMediaSummaryStore: ApplicationLibraryMediaSu
         fetchSummaries(recording: .needsMetadata(limit: limit, offset: offset))
     }
 
+    func fetchFavoriteMediaItemSummaries(
+        limit: Int,
+        offset: Int
+    ) throws -> [PersistedMediaItemSummary] {
+        fetchSummaries(recording: .favorites(limit: limit, offset: offset))
+    }
+
+    func fetchMediaItemSummaries(
+        collectionID: CollectionID,
+        limit: Int,
+        offset: Int
+    ) throws -> [PersistedMediaItemSummary] {
+        fetchSummaries(recording: .collection(collectionID: collectionID, limit: limit, offset: offset))
+    }
+
     private func fetchSummaries(recording call: StoreCall) -> [PersistedMediaItemSummary] {
         lock.withLock {
             activeCalls += 1
@@ -487,6 +540,8 @@ private enum StoreCall: Equatable {
     case media(mediaType: MediaType?, limit: Int, offset: Int)
     case recentlyPlayed(limit: Int, offset: Int)
     case needsMetadata(limit: Int, offset: Int)
+    case favorites(limit: Int, offset: Int)
+    case collection(collectionID: CollectionID, limit: Int, offset: Int)
 }
 
 private func makeSummary(
@@ -503,7 +558,9 @@ private func makeSummary(
     unavailableFileCount: Int = 0,
     hasMetadataItem: Bool = false,
     hasMetadataSourceRecord: Bool = false,
-    latestPlayedAt: Date? = nil
+    latestPlayedAt: Date? = nil,
+    isFavorite: Bool = false,
+    tagLabels: [String] = []
 ) -> PersistedMediaItemSummary {
     PersistedMediaItemSummary(
         id: id,
@@ -519,6 +576,8 @@ private func makeSummary(
         unavailableFileCount: unavailableFileCount,
         hasMetadataItem: hasMetadataItem,
         hasMetadataSourceRecord: hasMetadataSourceRecord,
-        latestPlayedAt: latestPlayedAt
+        latestPlayedAt: latestPlayedAt,
+        isFavorite: isFavorite,
+        tagLabels: tagLabels
     )
 }

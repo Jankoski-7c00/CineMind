@@ -6,6 +6,8 @@ public struct LibrarySearchRequest: Sendable, Equatable {
     public var text: String
     public var mediaType: LibrarySearchMediaTypeFilter
     public var availability: LibrarySearchAvailabilityFilter
+    public var favorite: LibrarySearchFavoriteFilter
+    public var tagID: TagID?
     public var sort: LibrarySearchSort
     public var page: LibraryBrowserPage
 
@@ -13,12 +15,16 @@ public struct LibrarySearchRequest: Sendable, Equatable {
         text: String,
         mediaType: LibrarySearchMediaTypeFilter = .all,
         availability: LibrarySearchAvailabilityFilter = .any,
+        favorite: LibrarySearchFavoriteFilter = .any,
+        tagID: TagID? = nil,
         sort: LibrarySearchSort = .relevance,
         page: LibraryBrowserPage
     ) {
         self.text = text
         self.mediaType = mediaType
         self.availability = availability
+        self.favorite = favorite
+        self.tagID = tagID
         self.sort = sort
         self.page = page
     }
@@ -34,6 +40,11 @@ public enum LibrarySearchAvailabilityFilter: Sendable, Equatable, Hashable, Case
     case any
     case available
     case unavailable
+}
+
+public enum LibrarySearchFavoriteFilter: Sendable, Equatable, Hashable, CaseIterable {
+    case any
+    case favoritesOnly
 }
 
 public enum LibrarySearchSort: Sendable, Equatable, Hashable, CaseIterable {
@@ -101,6 +112,8 @@ public struct LibraryMediaSearchUseCase: LibraryMediaSearching, Sendable {
             text: request.text,
             mediaType: request.mediaType,
             availability: request.availability,
+            favorite: request.favorite,
+            tagID: request.tagID,
             sort: request.sort,
             page: LibraryBrowserPage(
                 limit: request.page.limit,
@@ -136,6 +149,8 @@ public struct LibraryMediaSearchUseCase: LibraryMediaSearching, Sendable {
                             text: request.text,
                             mediaType: mediaType(for: request.mediaType),
                             availability: availability(for: request.availability),
+                            favorite: favorite(for: request.favorite),
+                            tagID: request.tagID,
                             sort: sort(for: request.sort),
                             limit: request.page.limit,
                             offset: request.page.offset
@@ -171,6 +186,17 @@ private func availability(
         .available
     case .unavailable:
         .unavailable
+    }
+}
+
+private func favorite(
+    for filter: LibrarySearchFavoriteFilter
+) -> PersistedMediaSearchFavoriteFilter {
+    switch filter {
+    case .any:
+        .any
+    case .favoritesOnly:
+        .favoritesOnly
     }
 }
 

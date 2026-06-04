@@ -31,6 +31,10 @@ internal enum SQLiteMigrator {
                 try apply(version: 5, statements: version5Statements, connection: connection)
                 applied.insert(5)
             }
+            if !applied.contains(6) {
+                try apply(version: 6, statements: version6Statements, connection: connection)
+                applied.insert(6)
+            }
         } catch {
             throw PersistenceError.migrationFailed(error.localizedDescription)
         }
@@ -575,6 +579,62 @@ internal enum SQLiteMigrator {
             FROM media_items
             WHERE media_items.id = old.media_item_id;
         END
+        """
+    ]
+
+    private static let version6Statements = [
+        """
+        CREATE TABLE IF NOT EXISTS tags (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            source TEXT NOT NULL CHECK(source IN ('manual', 'ai_suggested', 'imported')),
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS media_item_tags (
+            media_item_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+            tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            assigned_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (media_item_id, tag_id)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_media_item_tags_tag_id
+        ON media_item_tags(tag_id)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS favorite_media_items (
+            media_item_id TEXT PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS collections (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS collection_items (
+            collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+            media_item_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+            added_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (collection_id, media_item_id)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_collection_items_media_item_id
+        ON collection_items(media_item_id)
         """
     ]
 }

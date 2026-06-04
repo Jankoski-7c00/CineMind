@@ -2,12 +2,14 @@ import Domain
 import Foundation
 import Persistence
 
-public enum LibraryBrowserSection: Sendable, Equatable {
+public enum LibraryBrowserSection: Sendable, Equatable, Hashable {
     case library
     case movies
     case tvEpisodes
     case recentlyPlayed
     case needsMetadata
+    case favorites
+    case collection(CollectionID)
     case folders
 }
 
@@ -33,6 +35,8 @@ public struct LibraryItemSummary: Identifiable, Sendable, Equatable {
     public let availabilityLabel: String
     public let metadataLabel: String
     public let lastPlayedLabel: String?
+    public let isFavorite: Bool
+    public let tagLabels: [String]
 
     public init(
         id: MediaItemID,
@@ -41,7 +45,9 @@ public struct LibraryItemSummary: Identifiable, Sendable, Equatable {
         yearOrEpisodeLabel: String?,
         availabilityLabel: String,
         metadataLabel: String,
-        lastPlayedLabel: String?
+        lastPlayedLabel: String?,
+        isFavorite: Bool = false,
+        tagLabels: [String] = []
     ) {
         self.id = id
         self.displayTitle = displayTitle
@@ -50,6 +56,8 @@ public struct LibraryItemSummary: Identifiable, Sendable, Equatable {
         self.availabilityLabel = availabilityLabel
         self.metadataLabel = metadataLabel
         self.lastPlayedLabel = lastPlayedLabel
+        self.isFavorite = isFavorite
+        self.tagLabels = tagLabels
     }
 }
 
@@ -87,6 +95,15 @@ public protocol ApplicationLibraryMediaSummaryStore: Sendable {
         offset: Int
     ) throws -> [PersistedMediaItemSummary]
     func fetchMediaItemSummariesNeedingMetadata(
+        limit: Int,
+        offset: Int
+    ) throws -> [PersistedMediaItemSummary]
+    func fetchFavoriteMediaItemSummaries(
+        limit: Int,
+        offset: Int
+    ) throws -> [PersistedMediaItemSummary]
+    func fetchMediaItemSummaries(
+        collectionID: CollectionID,
         limit: Int,
         offset: Int
     ) throws -> [PersistedMediaItemSummary]
@@ -202,7 +219,9 @@ struct LibraryItemSummaryMapper {
             yearOrEpisodeLabel: yearOrEpisodeLabel(for: summary),
             availabilityLabel: availabilityLabel(for: summary),
             metadataLabel: metadataLabel(for: summary),
-            lastPlayedLabel: summary.latestPlayedAt.map(lastPlayedLabel)
+            lastPlayedLabel: summary.latestPlayedAt.map(lastPlayedLabel),
+            isFavorite: summary.isFavorite,
+            tagLabels: summary.tagLabels
         )
     }
 
@@ -291,6 +310,14 @@ private func fetchPersistedSummaries(
         try store.fetchRecentlyPlayedMediaItemSummaries(limit: page.limit, offset: page.offset)
     case .needsMetadata:
         try store.fetchMediaItemSummariesNeedingMetadata(limit: page.limit, offset: page.offset)
+    case .favorites:
+        try store.fetchFavoriteMediaItemSummaries(limit: page.limit, offset: page.offset)
+    case .collection(let collectionID):
+        try store.fetchMediaItemSummaries(
+            collectionID: collectionID,
+            limit: page.limit,
+            offset: page.offset
+        )
     case .folders:
         throw LibraryBrowserError.unsupportedMediaSection(section)
     }

@@ -16,6 +16,44 @@ public struct PersistedMediaItemSummary: Sendable, Equatable {
     public let hasMetadataItem: Bool
     public let hasMetadataSourceRecord: Bool
     public let latestPlayedAt: Date?
+    public let isFavorite: Bool
+    public let tagLabels: [String]
+
+    public init(
+        id: MediaItemID,
+        mediaType: MediaType,
+        title: String,
+        year: Int? = nil,
+        seriesTitle: String? = nil,
+        seasonNumber: Int? = nil,
+        episodeNumber: Int? = nil,
+        episodeTitle: String? = nil,
+        totalFileCount: Int = 0,
+        availableFileCount: Int = 0,
+        unavailableFileCount: Int = 0,
+        hasMetadataItem: Bool = false,
+        hasMetadataSourceRecord: Bool = false,
+        latestPlayedAt: Date? = nil,
+        isFavorite: Bool = false,
+        tagLabels: [String] = []
+    ) {
+        self.id = id
+        self.mediaType = mediaType
+        self.title = title
+        self.year = year
+        self.seriesTitle = seriesTitle
+        self.seasonNumber = seasonNumber
+        self.episodeNumber = episodeNumber
+        self.episodeTitle = episodeTitle
+        self.totalFileCount = totalFileCount
+        self.availableFileCount = availableFileCount
+        self.unavailableFileCount = unavailableFileCount
+        self.hasMetadataItem = hasMetadataItem
+        self.hasMetadataSourceRecord = hasMetadataSourceRecord
+        self.latestPlayedAt = latestPlayedAt
+        self.isFavorite = isFavorite
+        self.tagLabels = tagLabels
+    }
 }
 
 extension CineMindStore {
@@ -68,7 +106,7 @@ extension CineMindStore {
         )
     }
 
-    private func fetchMediaItemSummaries(
+    internal func fetchMediaItemSummaries(
         sql: String,
         stringBindings: [String],
         limit: Int,
@@ -109,7 +147,9 @@ extension CineMindStore {
             unavailableFileCount: try requiredSummaryInt(statement, 10),
             hasMetadataItem: try requiredSummaryBool(statement, 11),
             hasMetadataSourceRecord: try requiredSummaryBool(statement, 12),
-            latestPlayedAt: decodePersistenceDate(statement.double(at: 13))
+            latestPlayedAt: decodePersistenceDate(statement.double(at: 13)),
+            isFavorite: try requiredSummaryBool(statement, 14),
+            tagLabels: statement.string(at: 15).map(splitTagLabels) ?? []
         )
     }
 }
@@ -174,6 +214,26 @@ internal let mediaItemSummaryCommonCTESQL = """
         SELECT DISTINCT metadata_source_records.media_item_id,
                1 AS has_metadata_source_record
         FROM metadata_source_records
+    ),
+    favorite_presence AS (
+        SELECT favorite_media_items.media_item_id,
+               1 AS is_favorite
+        FROM favorite_media_items
+    ),
+    ordered_tag_labels AS (
+        SELECT media_item_tags.media_item_id,
+               tags.name
+        FROM media_item_tags
+        INNER JOIN tags
+          ON tags.id = media_item_tags.tag_id
+        ORDER BY tags.name COLLATE NOCASE ASC,
+                 tags.id ASC
+    ),
+    tag_label_summary AS (
+        SELECT ordered_tag_labels.media_item_id,
+               GROUP_CONCAT(ordered_tag_labels.name, '\(mediaItemTagLabelSeparator)') AS tag_labels
+        FROM ordered_tag_labels
+        GROUP BY ordered_tag_labels.media_item_id
     )
     """
 
@@ -191,7 +251,9 @@ internal let mediaItemSummarySelectColumnsSQL = """
            COALESCE(file_counts.unavailable_file_count, 0) AS unavailable_file_count,
            COALESCE(metadata_item_presence.has_metadata_item, 0) AS has_metadata_item,
            COALESCE(metadata_source_presence.has_metadata_source_record, 0) AS has_metadata_source_record,
-           latest_playback.latest_played_at
+           latest_playback.latest_played_at,
+           COALESCE(favorite_presence.is_favorite, 0) AS is_favorite,
+           tag_label_summary.tag_labels
     """
 
 internal let mediaItemSummaryJoinSQL = """
@@ -203,7 +265,19 @@ internal let mediaItemSummaryJoinSQL = """
       ON metadata_item_presence.media_item_id = media_items.id
     LEFT JOIN metadata_source_presence
       ON metadata_source_presence.media_item_id = media_items.id
+    LEFT JOIN favorite_presence
+      ON favorite_presence.media_item_id = media_items.id
+    LEFT JOIN tag_label_summary
+      ON tag_label_summary.media_item_id = media_items.id
     """
+
+private let mediaItemTagLabelSeparator = "\u{1F}"
+
+private func splitTagLabels(_ value: String) -> [String] {
+    value
+        .split(separator: Character(mediaItemTagLabelSeparator), omittingEmptySubsequences: true)
+        .map(String.init)
+}
 
 internal func requiredSummaryString(_ statement: SQLiteStatement, _ index: Int32) throws -> String {
     guard let value = statement.string(at: index) else {

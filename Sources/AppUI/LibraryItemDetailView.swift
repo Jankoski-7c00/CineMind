@@ -31,6 +31,13 @@ public enum SubtitleActionStatus: Equatable, Sendable {
     case error(String)
 }
 
+public enum CurationActionStatus: Equatable, Sendable {
+    case idle
+    case loading(String)
+    case success(String)
+    case error(String)
+}
+
 private enum FilePlaybackButtonState {
     case play
     case resume
@@ -74,6 +81,8 @@ public final class LibraryItemDetailViewModel: ObservableObject {
     @Published public private(set) var metadataCandidates: [LibraryMetadataCandidate] = []
     @Published public private(set) var isSearchingMetadataCandidates = false
     @Published public private(set) var metadataMutationRevision = 0
+    @Published public private(set) var curationActionStatus: CurationActionStatus = .idle
+    @Published public private(set) var curationMutationRevision = 0
     @Published public private(set) var subtitleActionStatus: SubtitleActionStatus = .idle
     @Published public private(set) var subtitleCandidates: [LibrarySubtitleCandidate] = []
     @Published public private(set) var isSearchingSubtitleCandidates = false
@@ -84,6 +93,7 @@ public final class LibraryItemDetailViewModel: ObservableObject {
     private let posterImageLoader: any PosterImageLoading
     private let metadataActions: (any LibraryMetadataActionHandling)?
     public let metadataActionsUnavailableMessage: String?
+    private let curationActions: (any LibraryCurationHandling)?
     private let subtitleActions: (any LibrarySubtitleActionHandling)?
     public let subtitleActionsUnavailableMessage: String?
     private var playbackController: (any PlaybackApplicationControlling)?
@@ -96,6 +106,7 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         playbackController: (any PlaybackApplicationControlling)? = nil,
         metadataActions: (any LibraryMetadataActionHandling)? = nil,
         metadataActionsUnavailableMessage: String? = nil,
+        curationActions: (any LibraryCurationHandling)? = nil,
         subtitleActions: (any LibrarySubtitleActionHandling)? = nil,
         subtitleActionsUnavailableMessage: String? = nil
     ) {
@@ -103,6 +114,7 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         self.posterImageLoader = LocalPosterImageLoader()
         self.metadataActions = metadataActions
         self.metadataActionsUnavailableMessage = metadataActionsUnavailableMessage
+        self.curationActions = curationActions
         self.subtitleActions = subtitleActions
         self.subtitleActionsUnavailableMessage = subtitleActionsUnavailableMessage
         setPlaybackController(playbackController)
@@ -143,6 +155,7 @@ public final class LibraryItemDetailViewModel: ObservableObject {
             detailState = .empty
             posterImageState = .idle
             metadataActionStatus = .idle
+            curationActionStatus = .idle
             metadataCandidates = []
             isSearchingMetadataCandidates = false
             resetSubtitleActionState()
@@ -186,6 +199,10 @@ public final class LibraryItemDetailViewModel: ObservableObject {
 
     public var metadataActionsAvailable: Bool {
         metadataActions != nil
+    }
+
+    public var curationActionsAvailable: Bool {
+        curationActions != nil
     }
 
     public var subtitleActionsAvailable: Bool {
@@ -268,6 +285,111 @@ public final class LibraryItemDetailViewModel: ObservableObject {
                 mediaItemID: mediaItemID,
                 posterAssetID: posterAssetID
             )
+        }
+    }
+
+    public func setFavorite(_ isFavorite: Bool) {
+        runCurationMutation(
+            loadingMessage: "Updating favorite...",
+            successMessage: isFavorite ? "Added to favorites." : "Removed from favorites."
+        ) { actions, mediaItemID in
+            _ = try await actions.setFavorite(mediaItemID: mediaItemID, isFavorite: isFavorite)
+        }
+    }
+
+    public func createAndAssignTag(name: String) {
+        runCurationMutation(
+            loadingMessage: "Adding tag...",
+            successMessage: "Tag added."
+        ) { actions, mediaItemID in
+            let tag = try await actions.createTag(name: name)
+            _ = try await actions.assignTag(tagID: tag.id, mediaItemID: mediaItemID)
+        }
+    }
+
+    public func assignTag(tagID: TagID) {
+        runCurationMutation(
+            loadingMessage: "Assigning tag...",
+            successMessage: "Tag assigned."
+        ) { actions, mediaItemID in
+            _ = try await actions.assignTag(tagID: tagID, mediaItemID: mediaItemID)
+        }
+    }
+
+    public func removeTag(tagID: TagID) {
+        runCurationMutation(
+            loadingMessage: "Removing tag...",
+            successMessage: "Tag removed."
+        ) { actions, mediaItemID in
+            _ = try await actions.removeTag(tagID: tagID, mediaItemID: mediaItemID)
+        }
+    }
+
+    public func renameTag(tagID: TagID, name: String) {
+        runCurationMutation(
+            loadingMessage: "Renaming tag...",
+            successMessage: "Tag renamed."
+        ) { actions, _ in
+            _ = try await actions.renameTag(tagID: tagID, name: name)
+        }
+    }
+
+    public func deleteTag(tagID: TagID) {
+        runCurationMutation(
+            loadingMessage: "Deleting tag...",
+            successMessage: "Tag deleted."
+        ) { actions, _ in
+            try await actions.deleteTag(tagID: tagID)
+        }
+    }
+
+    public func createAndAddCollection(name: String) {
+        runCurationMutation(
+            loadingMessage: "Adding collection...",
+            successMessage: "Collection updated."
+        ) { actions, mediaItemID in
+            let collection = try await actions.createCollection(name: name, description: nil)
+            _ = try await actions.addToCollection(collectionID: collection.id, mediaItemID: mediaItemID)
+        }
+    }
+
+    public func addToCollection(collectionID: CollectionID) {
+        runCurationMutation(
+            loadingMessage: "Adding to collection...",
+            successMessage: "Collection updated."
+        ) { actions, mediaItemID in
+            _ = try await actions.addToCollection(collectionID: collectionID, mediaItemID: mediaItemID)
+        }
+    }
+
+    public func removeFromCollection(collectionID: CollectionID) {
+        runCurationMutation(
+            loadingMessage: "Removing from collection...",
+            successMessage: "Collection updated."
+        ) { actions, mediaItemID in
+            _ = try await actions.removeFromCollection(collectionID: collectionID, mediaItemID: mediaItemID)
+        }
+    }
+
+    public func renameCollection(collectionID: CollectionID, name: String) {
+        runCurationMutation(
+            loadingMessage: "Renaming collection...",
+            successMessage: "Collection renamed."
+        ) { actions, _ in
+            _ = try await actions.renameCollection(
+                collectionID: collectionID,
+                name: name,
+                description: nil
+            )
+        }
+    }
+
+    public func deleteCollection(collectionID: CollectionID) {
+        runCurationMutation(
+            loadingMessage: "Deleting collection...",
+            successMessage: "Collection deleted."
+        ) { actions, _ in
+            try await actions.deleteCollection(collectionID: collectionID)
         }
     }
 
@@ -497,6 +619,33 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         }
     }
 
+    private func runCurationMutation(
+        loadingMessage: String,
+        successMessage: String,
+        operation: @escaping (
+            any LibraryCurationHandling,
+            MediaItemID
+        ) async throws -> Void
+    ) {
+        guard let curationActions, let currentItemID else {
+            curationActionStatus = .error("Curation actions are unavailable.")
+            return
+        }
+
+        curationActionStatus = .loading(loadingMessage)
+
+        Task {
+            do {
+                try await operation(curationActions, currentItemID)
+                curationActionStatus = .success(successMessage)
+                curationMutationRevision += 1
+                await loadDetail(for: currentItemID)
+            } catch {
+                curationActionStatus = .error(actionErrorMessage(error))
+            }
+        }
+    }
+
     private func resetSubtitleActionState() {
         subtitleActionStatus = .idle
         subtitleCandidates = []
@@ -525,27 +674,39 @@ public final class LibraryItemDetailViewModel: ObservableObject {
         if let actionError = error as? LibrarySubtitleActionError {
             return actionError.message
         }
+        if let actionError = error as? LibraryCurationError {
+            return actionError.message
+        }
         return error.localizedDescription
     }
 }
 
 public struct LibraryItemDetailView: View {
     @ObservedObject var viewModel: LibraryItemDetailViewModel
+    let curationSnapshot: LibraryCurationSnapshot
     private let playbackSurface: AnyView?
 
     @State private var isScrubbing = false
     @State private var scrubPositionMS: Double = 0
     @State private var isRematchSheetPresented = false
     @State private var isSubtitleSearchSheetPresented = false
+    @State private var newTagName = ""
+    @State private var newCollectionName = ""
+    @State private var editingTagID: TagID?
+    @State private var editingTagName = ""
+    @State private var editingCollectionID: CollectionID?
+    @State private var editingCollectionName = ""
     @State private var titleOverrideText = ""
     @State private var summaryOverrideText = ""
     @State private var languageOverrideText = ""
 
     public init(
         viewModel: LibraryItemDetailViewModel,
+        curationSnapshot: LibraryCurationSnapshot = .empty,
         playbackSurface: AnyView? = nil
     ) {
         self.viewModel = viewModel
+        self.curationSnapshot = curationSnapshot
         self.playbackSurface = playbackSurface
     }
 
@@ -615,6 +776,8 @@ public struct LibraryItemDetailView: View {
 
                     primaryActionRow(files: detail.files)
 
+                    curationBlock(detail.curation)
+
                     playbackBlock(for: detail)
 
                     metadataBlock(detail.metadataDetail)
@@ -674,6 +837,339 @@ public struct LibraryItemDetailView: View {
             Color.black.opacity(0.30)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func curationBlock(_ curation: LibraryItemCurationDetail) -> some View {
+        LiquidGlassCard("Curation", systemImage: "star") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Button {
+                        viewModel.setFavorite(!curation.isFavorite)
+                    } label: {
+                        Label(
+                            curation.isFavorite ? "Favorite" : "Favorite",
+                            systemImage: curation.isFavorite ? "star.fill" : "star"
+                        )
+                    }
+                    .buttonStyle(curation.isFavorite ? .liquidGlassPrimary : .liquidGlass)
+                    .disabled(!viewModel.curationActionsAvailable)
+
+                    curationActionStatusView
+                    Spacer()
+                }
+
+                Divider()
+                    .opacity(0.35)
+
+                curationTagSection(curation.tags)
+
+                Divider()
+                    .opacity(0.35)
+
+                curationCollectionSection(curation.collections)
+            }
+        }
+    }
+
+    private func curationTagSection(_ assignedTags: [LibraryTagSummary]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Tags")
+                    .font(.callout.weight(.medium))
+                Spacer()
+                tagAssignmentMenu(assignedTags)
+            }
+
+            if assignedTags.isEmpty {
+                Text(CineMindDisplayText.emptyValue)
+                    .cinemindSecondaryTextStyle()
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(assignedTags) { tag in
+                        tagChipRow(tag)
+                    }
+                }
+            }
+
+            curationCreateRow(
+                placeholder: "New Tag",
+                text: $newTagName,
+                systemImage: "plus"
+            ) {
+                let name = newTagName
+                newTagName = ""
+                viewModel.createAndAssignTag(name: name)
+            }
+
+            if let editingTagID {
+                curationEditRow(
+                    title: "Rename Tag",
+                    text: $editingTagName,
+                    cancel: {
+                        self.editingTagID = nil
+                        editingTagName = ""
+                    },
+                    save: {
+                        let name = editingTagName
+                        self.editingTagID = nil
+                        editingTagName = ""
+                        viewModel.renameTag(tagID: editingTagID, name: name)
+                    }
+                )
+            }
+        }
+    }
+
+    private func tagAssignmentMenu(_ assignedTags: [LibraryTagSummary]) -> some View {
+        let assignedIDs = Set(assignedTags.map(\.id))
+        let availableTags = curationSnapshot.tags.filter { !assignedIDs.contains($0.id) }
+        return Menu {
+            if availableTags.isEmpty {
+                Text("No Tags")
+            } else {
+                ForEach(availableTags) { tag in
+                    Button {
+                        viewModel.assignTag(tagID: tag.id)
+                    } label: {
+                        Text(tag.name)
+                    }
+                }
+            }
+        } label: {
+            Label("Add Tag", systemImage: "plus.circle")
+        }
+        .controlSize(.small)
+        .disabled(!viewModel.curationActionsAvailable || availableTags.isEmpty)
+    }
+
+    private func tagChipRow(_ tag: LibraryTagSummary) -> some View {
+        HStack(spacing: 8) {
+            Label(tag.name, systemImage: "tag")
+                .lineLimit(1)
+                .font(.callout)
+
+            if let count = tag.mediaItemCountLabel {
+                Text(count)
+                    .font(.caption)
+                    .cinemindSecondaryTextStyle()
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                viewModel.removeTag(tagID: tag.id)
+            } label: {
+                Image(systemName: "xmark.circle")
+            }
+            .buttonStyle(.plain)
+            .help("Remove tag")
+
+            Menu {
+                Button("Rename") {
+                    editingTagID = tag.id
+                    editingTagName = tag.name
+                }
+                Button("Delete", role: .destructive) {
+                    viewModel.deleteTag(tagID: tag.id)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .help("Tag actions")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .liquidGlassSurface(cornerRadius: 10, material: .ultraThinMaterial)
+    }
+
+    private func curationCollectionSection(
+        _ itemCollections: [LibraryCollectionSummary]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Collections")
+                    .font(.callout.weight(.medium))
+                Spacer()
+                collectionAssignmentMenu(itemCollections)
+            }
+
+            if itemCollections.isEmpty {
+                Text(CineMindDisplayText.emptyValue)
+                    .cinemindSecondaryTextStyle()
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(itemCollections) { collection in
+                        collectionChipRow(collection)
+                    }
+                }
+            }
+
+            curationCreateRow(
+                placeholder: "New Collection",
+                text: $newCollectionName,
+                systemImage: "plus"
+            ) {
+                let name = newCollectionName
+                newCollectionName = ""
+                viewModel.createAndAddCollection(name: name)
+            }
+
+            if let editingCollectionID {
+                curationEditRow(
+                    title: "Rename Collection",
+                    text: $editingCollectionName,
+                    cancel: {
+                        self.editingCollectionID = nil
+                        editingCollectionName = ""
+                    },
+                    save: {
+                        let name = editingCollectionName
+                        self.editingCollectionID = nil
+                        editingCollectionName = ""
+                        viewModel.renameCollection(collectionID: editingCollectionID, name: name)
+                    }
+                )
+            }
+        }
+    }
+
+    private func collectionAssignmentMenu(
+        _ itemCollections: [LibraryCollectionSummary]
+    ) -> some View {
+        let memberIDs = Set(itemCollections.map(\.id))
+        let availableCollections = curationSnapshot.collections.filter { !memberIDs.contains($0.id) }
+        return Menu {
+            if availableCollections.isEmpty {
+                Text("No Collections")
+            } else {
+                ForEach(availableCollections) { collection in
+                    Button {
+                        viewModel.addToCollection(collectionID: collection.id)
+                    } label: {
+                        Text(collection.name)
+                    }
+                }
+            }
+        } label: {
+            Label("Add Collection", systemImage: "plus.circle")
+        }
+        .controlSize(.small)
+        .disabled(!viewModel.curationActionsAvailable || availableCollections.isEmpty)
+    }
+
+    private func collectionChipRow(_ collection: LibraryCollectionSummary) -> some View {
+        HStack(spacing: 8) {
+            Label(collection.name, systemImage: "rectangle.stack")
+                .lineLimit(1)
+                .font(.callout)
+
+            if let count = collection.mediaItemCountLabel {
+                Text(count)
+                    .font(.caption)
+                    .cinemindSecondaryTextStyle()
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                viewModel.removeFromCollection(collectionID: collection.id)
+            } label: {
+                Image(systemName: "xmark.circle")
+            }
+            .buttonStyle(.plain)
+            .help("Remove from collection")
+
+            Menu {
+                Button("Rename") {
+                    editingCollectionID = collection.id
+                    editingCollectionName = collection.name
+                }
+                Button("Delete", role: .destructive) {
+                    viewModel.deleteCollection(collectionID: collection.id)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .help("Collection actions")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .liquidGlassSurface(cornerRadius: 10, material: .ultraThinMaterial)
+    }
+
+    private func curationCreateRow(
+        placeholder: String,
+        text: Binding<String>,
+        systemImage: String,
+        submit: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+
+            Button(action: submit) {
+                Image(systemName: systemImage)
+            }
+            .buttonStyle(.liquidGlass)
+            .disabled(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .controlSize(.small)
+        .disabled(!viewModel.curationActionsAvailable)
+    }
+
+    private func curationEditRow(
+        title: String,
+        text: Binding<String>,
+        cancel: @escaping () -> Void,
+        save: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.caption)
+                .cinemindSecondaryTextStyle()
+                .frame(width: 120, alignment: .leading)
+
+            TextField(title, text: text)
+                .textFieldStyle(.roundedBorder)
+
+            Button(action: save) {
+                Image(systemName: "checkmark")
+            }
+            .buttonStyle(.liquidGlassPrimary)
+            .disabled(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            Button(action: cancel) {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.liquidGlass)
+        }
+        .controlSize(.small)
+    }
+
+    @ViewBuilder
+    private var curationActionStatusView: some View {
+        switch viewModel.curationActionStatus {
+        case .idle:
+            EmptyView()
+        case .loading(let message):
+            HStack(spacing: 7) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(message)
+                    .cinemindSecondaryTextStyle()
+            }
+            .font(.caption)
+        case .success(let message):
+            Label(message, systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundColor(.green)
+        case .error(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundColor(.red)
+        }
     }
 
     private var subtitleActionsBlock: some View {

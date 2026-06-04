@@ -3,9 +3,14 @@ import SwiftUI
 
 public struct SidebarView: View {
     @Binding var selectedSection: LibraryBrowserSection
+    let collections: [LibraryCollectionSummary]
 
-    public init(selectedSection: Binding<LibraryBrowserSection>) {
+    public init(
+        selectedSection: Binding<LibraryBrowserSection>,
+        collections: [LibraryCollectionSummary]
+    ) {
         self._selectedSection = selectedSection
+        self.collections = collections
     }
 
     public var body: some View {
@@ -15,7 +20,20 @@ public struct SidebarView: View {
             sidebarRow(.tvEpisodes, title: "TV Episodes", systemImage: "tv")
             sidebarRow(.recentlyPlayed, title: "Recently Played", systemImage: "clock.arrow.circlepath")
             sidebarRow(.needsMetadata, title: "Needs Metadata", systemImage: "tag")
+            sidebarRow(.favorites, title: "Favorites", systemImage: "star")
             sidebarRow(.folders, title: "Folders", systemImage: "folder")
+
+            if !collections.isEmpty {
+                Section("Collections") {
+                    ForEach(collections) { collection in
+                        sidebarRow(
+                            .collection(collection.id),
+                            title: collection.name,
+                            systemImage: "rectangle.stack"
+                        )
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
         .tint(.accentColor)

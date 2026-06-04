@@ -100,6 +100,47 @@ final class DomainModelTests: XCTestCase {
         )
     }
 
+    func testCurationNamesTrimCollapseWhitespaceAndNormalizeCase() throws {
+        let tag = try Tag.validated(
+            id: "tag-sci-fi",
+            name: "  Sci   Fi  ",
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 200)
+        )
+        let collection = try MediaCollection.validated(
+            id: "collection-weekend",
+            name: "  Weekend   Watchlist  ",
+            description: "Friday",
+            createdAt: Date(timeIntervalSince1970: 300),
+            updatedAt: Date(timeIntervalSince1970: 400)
+        )
+
+        XCTAssertEqual(CurationNameNormalizer.displayName(" A\tB\n C "), "A B C")
+        XCTAssertEqual(tag.name, "Sci Fi")
+        XCTAssertEqual(tag.normalizedName, "sci fi")
+        XCTAssertEqual(tag.source, .manual)
+        XCTAssertEqual(collection.name, "Weekend Watchlist")
+        XCTAssertEqual(collection.normalizedName, "weekend watchlist")
+        XCTAssertEqual(collection.description, "Friday")
+    }
+
+    func testCurationValidationRejectsEmptyNames() {
+        XCTAssertThrowsError(try Tag.validated(name: "   ")) { error in
+            XCTAssertEqual(error as? DomainValidationError, .emptyTagName)
+        }
+        XCTAssertThrowsError(try Tag.validated(name: "Tag", normalizedName: "   ")) { error in
+            XCTAssertEqual(error as? DomainValidationError, .emptyNormalizedTagName)
+        }
+        XCTAssertThrowsError(try MediaCollection.validated(name: "\n\t")) { error in
+            XCTAssertEqual(error as? DomainValidationError, .emptyCollectionName)
+        }
+        XCTAssertThrowsError(
+            try MediaCollection.validated(name: "Collection", normalizedName: "   ")
+        ) { error in
+            XCTAssertEqual(error as? DomainValidationError, .emptyNormalizedCollectionName)
+        }
+    }
+
     func testMediaFileAvailabilityAvailableAndUnavailableBehavior() {
         let item = MediaItem(mediaType: .movie, title: "Moon", year: 2009)
         let availableFile = MediaFile(

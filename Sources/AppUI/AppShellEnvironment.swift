@@ -4,6 +4,8 @@ public struct AppShellEnvironment {
     public let mediaSummaryBrowser: any LibraryMediaSummaryBrowsing
     public let mediaSearcher: any LibraryMediaSearching
     public let itemDetailBrowser: any LibraryItemDetailBrowsing
+    public let curationBrowser: any LibraryCurationBrowsing
+    public let curationHandler: any LibraryCurationHandling
     public let folderSummaryBrowser: any LibraryFolderSummaryBrowsing
     public let folderPicker: any LibraryFolderPicking
     public let folderAdder: any LibraryFolderAdding
@@ -18,6 +20,8 @@ public struct AppShellEnvironment {
         mediaSummaryBrowser: any LibraryMediaSummaryBrowsing,
         mediaSearcher: any LibraryMediaSearching,
         itemDetailBrowser: any LibraryItemDetailBrowsing,
+        curationBrowser: any LibraryCurationBrowsing,
+        curationHandler: any LibraryCurationHandling,
         folderSummaryBrowser: any LibraryFolderSummaryBrowsing,
         folderPicker: any LibraryFolderPicking,
         folderAdder: any LibraryFolderAdding,
@@ -31,6 +35,8 @@ public struct AppShellEnvironment {
         self.mediaSummaryBrowser = mediaSummaryBrowser
         self.mediaSearcher = mediaSearcher
         self.itemDetailBrowser = itemDetailBrowser
+        self.curationBrowser = curationBrowser
+        self.curationHandler = curationHandler
         self.folderSummaryBrowser = folderSummaryBrowser
         self.folderPicker = folderPicker
         self.folderAdder = folderAdder

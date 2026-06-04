@@ -39,7 +39,7 @@ public struct CineMindRootView: View {
             )
         } else {
             NavigationSplitView {
-                SidebarView(selectedSection: .constant(.library))
+                SidebarView(selectedSection: .constant(.library), collections: [])
             } content: {
                 Text("Select an item")
                     .foregroundColor(.secondary)
@@ -83,6 +83,7 @@ fileprivate struct ReadyShellView: View {
             playbackController: environment.playbackController,
             metadataActions: environment.metadataActions,
             metadataActionsUnavailableMessage: environment.metadataActionsUnavailableMessage,
+            curationActions: environment.curationHandler,
             subtitleActions: environment.subtitleActions,
             subtitleActionsUnavailableMessage: environment.subtitleActionsUnavailableMessage
         )
@@ -90,6 +91,7 @@ fileprivate struct ReadyShellView: View {
             LibraryBrowserViewModel(
                 mediaSummaryBrowser: environment.mediaSummaryBrowser,
                 mediaSearcher: environment.mediaSearcher,
+                curationBrowser: environment.curationBrowser,
                 folderSummaryBrowser: environment.folderSummaryBrowser,
                 folderPicker: environment.folderPicker,
                 folderAdder: environment.folderAdder,
@@ -107,13 +109,15 @@ fileprivate struct ReadyShellView: View {
                 selectedSection: Binding(
                     get: { browserViewModel.selectedSection },
                     set: { browserViewModel.selectSection($0) }
-                )
+                ),
+                collections: browserViewModel.curationSnapshot.collections
             )
         } content: {
             LibraryBrowserView(viewModel: browserViewModel)
         } detail: {
             LibraryItemDetailView(
                 viewModel: detailViewModel,
+                curationSnapshot: browserViewModel.curationSnapshot,
                 playbackSurface: playbackSurface
             )
                 .onChange(of: browserViewModel.selectedItemID) { _, newID in
@@ -121,6 +125,12 @@ fileprivate struct ReadyShellView: View {
                 }
                 .onChange(of: detailViewModel.metadataMutationRevision) { _, _ in
                     Task { await browserViewModel.reloadCurrentSection() }
+                }
+                .onChange(of: detailViewModel.curationMutationRevision) { _, _ in
+                    Task {
+                        await browserViewModel.reloadCurationSnapshot()
+                        await browserViewModel.reloadCurrentSection()
+                    }
                 }
         }
     }

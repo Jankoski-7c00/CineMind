@@ -121,6 +121,15 @@ public struct LibraryBrowserView: View {
             return "Local folders"
         }
 
+        if viewModel.selectedSection == .favorites {
+            return "Favorite media"
+        }
+
+        if case .collection(let collectionID) = viewModel.selectedSection,
+           let collection = viewModel.curationSnapshot.collections.first(where: { $0.id == collectionID }) {
+            return collection.mediaItemCountLabel ?? collection.name
+        }
+
         if let count = viewModel.snapshot?.items.count {
             return count == 1 ? "1 item" : "\(count) items"
         }
@@ -142,6 +151,10 @@ public struct LibraryBrowserView: View {
                         .frame(width: 190)
                     availabilityPicker
                         .frame(width: 130)
+                    favoritePicker
+                        .frame(width: 126)
+                    tagFilterPicker
+                        .frame(width: 150)
                     sortPicker
                         .frame(width: 170)
                     clearSearchButton
@@ -155,6 +168,8 @@ public struct LibraryBrowserView: View {
                     HStack(spacing: 8) {
                         mediaTypePicker
                         availabilityPicker
+                        favoritePicker
+                        tagFilterPicker
                         sortPicker
                     }
                 }
@@ -192,6 +207,25 @@ public struct LibraryBrowserView: View {
             Text("Missing").tag(LibrarySearchAvailabilityFilter.unavailable)
         }
         .pickerStyle(.menu)
+    }
+
+    private var favoritePicker: some View {
+        Picker("Favorite", selection: $viewModel.searchFavoriteFilter) {
+            Text("Any").tag(LibrarySearchFavoriteFilter.any)
+            Text("Favorites").tag(LibrarySearchFavoriteFilter.favoritesOnly)
+        }
+        .pickerStyle(.menu)
+    }
+
+    private var tagFilterPicker: some View {
+        Picker("Tag", selection: $viewModel.searchTagID) {
+            Text("Any Tag").tag(Optional<TagID>.none)
+            ForEach(viewModel.curationSnapshot.tags) { tag in
+                Text(tag.name).tag(Optional(tag.id))
+            }
+        }
+        .pickerStyle(.menu)
+        .disabled(viewModel.curationSnapshot.tags.isEmpty)
     }
 
     private var sortPicker: some View {
@@ -289,7 +323,7 @@ public struct LibraryBrowserView: View {
                         Label("Clear Search", systemImage: "xmark.circle")
                     }
                     .buttonStyle(.liquidGlass)
-                } else {
+                } else if emptyStateShowsAddFolderButton {
                     Button {
                         Task { await viewModel.addFolder() }
                     } label: {
@@ -304,25 +338,59 @@ public struct LibraryBrowserView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var emptyStateShowsAddFolderButton: Bool {
+        switch viewModel.selectedSection {
+        case .favorites, .collection:
+            false
+        case .folders, .library, .movies, .tvEpisodes, .recentlyPlayed, .needsMetadata:
+            true
+        }
+    }
+
     private var emptyStateIconName: String {
         if viewModel.isSearchActive {
             return "magnifyingglass"
         }
-        return viewModel.selectedSection == .folders ? "folder" : "film.stack"
+        switch viewModel.selectedSection {
+        case .folders:
+            return "folder"
+        case .favorites:
+            return "star"
+        case .collection:
+            return "rectangle.stack"
+        case .library, .movies, .tvEpisodes, .recentlyPlayed, .needsMetadata:
+            return "film.stack"
+        }
     }
 
     private var emptyStateTitle: String {
         if viewModel.isSearchActive {
             return "No matches"
         }
-        return viewModel.selectedSection == .folders ? "No folders yet" : "No media yet"
+        switch viewModel.selectedSection {
+        case .folders:
+            return "No folders yet"
+        case .favorites:
+            return "No favorites yet"
+        case .collection:
+            return "No collection items"
+        case .library, .movies, .tvEpisodes, .recentlyPlayed, .needsMetadata:
+            return "No media yet"
+        }
     }
 
     private var emptyStateMessage: String {
         if viewModel.isSearchActive {
             return "Try a different search or filter."
         }
-        return "Add a folder to start building your library."
+        switch viewModel.selectedSection {
+        case .favorites:
+            return "Mark media as favorite from the detail view."
+        case .collection:
+            return "Add media to this collection from the detail view."
+        case .folders, .library, .movies, .tvEpisodes, .recentlyPlayed, .needsMetadata:
+            return "Add a folder to start building your library."
+        }
     }
 
     private func errorContent(message: String) -> some View {
@@ -379,8 +447,8 @@ public struct LibraryBrowserView: View {
 
     private func mediaTitleCell(_ item: LibraryItemSummary) -> some View {
         HStack(spacing: 9) {
-            Image(systemName: item.mediaTypeLabel == "TV Episode" ? "tv" : "film")
-                .foregroundStyle(.secondary)
+            Image(systemName: item.isFavorite ? "star.fill" : mediaIconName(for: item))
+                .foregroundStyle(item.isFavorite ? Color.yellow : .secondary)
                 .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -399,12 +467,35 @@ public struct LibraryBrowserView: View {
 
     private func mediaSubtitle(for item: LibraryItemSummary) -> String {
         let availability = availabilityDescriptor(item.availabilityLabel).title
+        var parts: [String] = [item.mediaTypeLabel]
         guard let yearOrEpisode = item.yearOrEpisodeLabel,
               !yearOrEpisode.isEmpty else {
-            return "\(item.mediaTypeLabel) · \(availability)"
+            parts.append(availability)
+            if let tagSummary = tagSummary(for: item) {
+                parts.append(tagSummary)
+            }
+            return parts.joined(separator: " · ")
         }
 
-        return "\(item.mediaTypeLabel) · \(yearOrEpisode) · \(availability)"
+        parts.append(yearOrEpisode)
+        parts.append(availability)
+        if let tagSummary = tagSummary(for: item) {
+            parts.append(tagSummary)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func mediaIconName(for item: LibraryItemSummary) -> String {
+        item.mediaTypeLabel == "TV Episode" ? "tv" : "film"
+    }
+
+    private func tagSummary(for item: LibraryItemSummary) -> String? {
+        guard !item.tagLabels.isEmpty else {
+            return nil
+        }
+        let visible = item.tagLabels.prefix(2).joined(separator: ", ")
+        let remaining = item.tagLabels.count - 2
+        return remaining > 0 ? "\(visible) +\(remaining)" : visible
     }
 
     private func tableStatusLabel(

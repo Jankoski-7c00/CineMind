@@ -5,6 +5,8 @@ public struct PersistedMediaSearchQuery: Sendable, Equatable {
     public var text: String
     public var mediaType: MediaType?
     public var availability: PersistedMediaSearchAvailability
+    public var favorite: PersistedMediaSearchFavoriteFilter
+    public var tagID: TagID?
     public var sort: PersistedMediaSearchSort
     public var limit: Int
     public var offset: Int
@@ -13,6 +15,8 @@ public struct PersistedMediaSearchQuery: Sendable, Equatable {
         text: String,
         mediaType: MediaType? = nil,
         availability: PersistedMediaSearchAvailability = .any,
+        favorite: PersistedMediaSearchFavoriteFilter = .any,
+        tagID: TagID? = nil,
         sort: PersistedMediaSearchSort = .relevance,
         limit: Int,
         offset: Int = 0
@@ -20,6 +24,8 @@ public struct PersistedMediaSearchQuery: Sendable, Equatable {
         self.text = text
         self.mediaType = mediaType
         self.availability = availability
+        self.favorite = favorite
+        self.tagID = tagID
         self.sort = sort
         self.limit = limit
         self.offset = offset
@@ -30,6 +36,11 @@ public enum PersistedMediaSearchAvailability: Sendable, Equatable {
     case any
     case available
     case unavailable
+}
+
+public enum PersistedMediaSearchFavoriteFilter: Sendable, Equatable {
+    case any
+    case favoritesOnly
 }
 
 public enum PersistedMediaSearchSort: Sendable, Equatable {
@@ -87,6 +98,31 @@ extension CineMindStore {
             whereClauses.append("COALESCE(file_counts.available_file_count, 0) = 0")
         }
 
+        switch query.favorite {
+        case .any:
+            break
+        case .favoritesOnly:
+            whereClauses.append("""
+                EXISTS (
+                    SELECT 1
+                    FROM favorite_media_items
+                    WHERE favorite_media_items.media_item_id = media_items.id
+                )
+                """)
+        }
+
+        if let tagID = query.tagID {
+            whereClauses.append("""
+                EXISTS (
+                    SELECT 1
+                    FROM media_item_tags
+                    WHERE media_item_tags.media_item_id = media_items.id
+                      AND media_item_tags.tag_id = ?
+                )
+                """)
+            stringBindings.append(tagID)
+        }
+
         let sql = mediaSearchSQL(
             textSearchIsActive: textSearchIsActive,
             whereClauses: whereClauses,
@@ -109,7 +145,7 @@ extension CineMindStore {
             results.append(
                 PersistedMediaSearchResult(
                     summary: try mapMediaItemSummary(statement),
-                    rank: statement.double(at: 14),
+                    rank: statement.double(at: 16),
                     matchReason: nil
                 )
             )

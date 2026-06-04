@@ -49,6 +49,7 @@ enum CineMindAppEnvironmentFactory {
         let mediaSummaryBrowser = LibraryMediaSummaryUseCase(store: store)
         let mediaSearcher = LibraryMediaSearchUseCase(store: store)
         let itemDetailBrowser = LibraryItemDetailUseCase(store: store)
+        let libraryCuration = LibraryCurationUseCase(store: store)
         let folderSummaryBrowser = LibraryFolderSummaryUseCase(store: store)
         let folderPicker = AppKitLibraryFolderPicker()
         let folderAdder = AddLibraryFolderUseCase(store: store)
@@ -68,6 +69,8 @@ enum CineMindAppEnvironmentFactory {
             mediaSummaryBrowser: mediaSummaryBrowser,
             mediaSearcher: mediaSearcher,
             itemDetailBrowser: itemDetailBrowser,
+            curationBrowser: libraryCuration,
+            curationHandler: libraryCuration,
             folderSummaryBrowser: folderSummaryBrowser,
             folderPicker: folderPicker,
             folderAdder: folderAdder,

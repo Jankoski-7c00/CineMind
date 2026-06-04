@@ -63,6 +63,32 @@ final class LibrarySearchTests: XCTestCase {
         )
     }
 
+    func testSearchMapsCurationFiltersToPersistenceQuery() async throws {
+        let store = RecordingLibraryMediaSearchStore()
+        let useCase = LibraryMediaSearchUseCase(store: store)
+
+        _ = try await useCase.search(
+            LibrarySearchRequest(
+                text: "",
+                favorite: .favoritesOnly,
+                tagID: "tag-1",
+                page: LibraryBrowserPage(limit: 10)
+            )
+        )
+
+        XCTAssertEqual(
+            store.queries,
+            [
+                PersistedMediaSearchQuery(
+                    text: "",
+                    favorite: .favoritesOnly,
+                    tagID: "tag-1",
+                    limit: 10
+                )
+            ]
+        )
+    }
+
     func testLimitLessThanOrEqualToZeroReturnsEmptySnapshotWithoutStoreCall() async throws {
         let store = RecordingLibraryMediaSearchStore()
         let useCase = LibraryMediaSearchUseCase(store: store)

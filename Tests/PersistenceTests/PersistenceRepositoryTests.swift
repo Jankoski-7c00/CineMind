@@ -33,9 +33,13 @@ final class PersistenceRepositoryTests: XCTestCase {
             [
                 "libraries",
                 "library_folders",
+                "collection_items",
+                "collections",
+                "favorite_media_items",
                 "media_files",
                 "media_items",
                 "media_search_fts",
+                "media_item_tags",
                 "metadata_external_ids",
                 "metadata_items",
                 "metadata_source_records",
@@ -44,10 +48,11 @@ final class PersistenceRepositoryTests: XCTestCase {
                 "scan_runs",
                 "scan_issues",
                 "schema_migrations",
-                "subtitle_assets"
+                "subtitle_assets",
+                "tags"
             ]
         )
-        XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3, 4, 5])
+        XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3, 4, 5, 6])
     }
 
     func testMigrationIsIdempotentAcrossReopen() throws {
@@ -55,12 +60,12 @@ final class PersistenceRepositoryTests: XCTestCase {
         do {
             let store = try makeStore()
             firstTables = try store.schemaTableNames()
-            XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3, 4, 5])
+            XCTAssertEqual(try store.appliedMigrationVersions(), [1, 2, 3, 4, 5, 6])
         }
 
         let reopened = try makeStore()
         XCTAssertEqual(try reopened.schemaTableNames(), firstTables)
-        XCTAssertEqual(try reopened.appliedMigrationVersions(), [1, 2, 3, 4, 5])
+        XCTAssertEqual(try reopened.appliedMigrationVersions(), [1, 2, 3, 4, 5, 6])
     }
 
     func testV1DatabaseUpgradesThroughV2ToV3WithoutDataLoss() throws {
@@ -127,7 +132,7 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("playback_history"))
 
         let upgraded = try makeStore()
-        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5])
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5, 6])
         XCTAssertTrue(try upgraded.schemaTableNames().contains("playback_history"))
         XCTAssertTrue(try upgraded.schemaTableNames().contains("metadata_items"))
         XCTAssertTrue(try upgraded.schemaTableNames().contains("subtitle_assets"))
@@ -213,7 +218,7 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("metadata_items"))
 
         let upgraded = try makeStore()
-        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5])
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5, 6])
         XCTAssertEqual(try upgraded.fetchLibrary(id: libraryID)?.name, "CineMind Library")
         XCTAssertEqual(try upgraded.fetchLibraryFolders(libraryID: libraryID).map(\.id), [folderID])
         XCTAssertEqual(try upgraded.fetchMediaItem(id: itemID)?.title, "Arrival")
@@ -251,7 +256,7 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("subtitle_assets"))
 
         let upgraded = try makeStore()
-        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5])
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5, 6])
         XCTAssertTrue(try upgraded.schemaTableNames().contains("subtitle_assets"))
         XCTAssertTrue(try upgraded.schemaTableNames().contains("media_search_fts"))
         XCTAssertEqual(try upgraded.fetchLibrary(id: libraryID)?.name, "CineMind Library")
@@ -287,7 +292,7 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(try RawSQLiteFixture.tableNames(path: databaseURL.path).contains("media_search_fts"))
 
         let upgraded = try makeStore()
-        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5])
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5, 6])
         XCTAssertTrue(try upgraded.schemaTableNames().contains("media_search_fts"))
         XCTAssertEqual(
             try upgraded.searchMediaItems(
@@ -315,6 +320,40 @@ final class PersistenceRepositoryTests: XCTestCase {
             ).map(\.summary.id),
             [itemID]
         )
+    }
+
+    func testV5DatabaseUpgradesToV6CreatesCurationSchemaWithoutDataLoss() throws {
+        let itemID: MediaItemID
+
+        do {
+            let context = try makePlaybackContext()
+            itemID = context.item.id
+        }
+
+        try removeV6SchemaObjects()
+        XCTAssertEqual(try RawSQLiteFixture.migrationVersions(path: databaseURL.path), [1, 2, 3, 4, 5])
+        XCTAssertTrue(Set(try RawSQLiteFixture.tableNames(path: databaseURL.path)).isDisjoint(with: curationTableNames))
+
+        let upgraded = try makeStore()
+        XCTAssertEqual(try upgraded.appliedMigrationVersions(), [1, 2, 3, 4, 5, 6])
+        XCTAssertTrue(try upgraded.schemaTableNames().contains("tags"))
+        XCTAssertTrue(try upgraded.schemaTableNames().contains("favorite_media_items"))
+        XCTAssertTrue(try upgraded.schemaTableNames().contains("collections"))
+        XCTAssertEqual(try upgraded.fetchMediaItem(id: itemID)?.title, "Arrival")
+        XCTAssertEqual(
+            try upgraded.fetchMediaItemCuration(mediaItemID: itemID),
+            PersistedMediaItemCuration(
+                mediaItemID: itemID,
+                isFavorite: false,
+                tags: [],
+                collections: []
+            )
+        )
+
+        let readOnly = try CineMindStore(readOnlyPath: databaseURL.path)
+        XCTAssertEqual(try readOnly.fetchTags(), [])
+        XCTAssertEqual(try readOnly.fetchCollections(), [])
+        XCTAssertFalse(try readOnly.fetchMediaItemCuration(mediaItemID: itemID).isFavorite)
     }
 
     func testSearchMediaItemsMatchesIndexedFieldsAndKeepsIndexFresh() throws {
@@ -562,6 +601,143 @@ final class PersistenceRepositoryTests: XCTestCase {
         )
     }
 
+    func testCurationTagsFavoritesCollectionsPersistAndBrowse() throws {
+        let itemID: MediaItemID
+        let otherItemID: MediaItemID
+        let tagID = "tag-sci-fi"
+        let collectionID = "collection-weekend"
+
+        do {
+            let context = try makeMediaContext()
+            let otherItem = MediaItem(id: "curation-other", mediaType: .movie, title: "Moon")
+            try context.store.saveMediaItem(otherItem)
+
+            let tag = try Tag.validated(
+                id: tagID,
+                name: "  Sci   Fi  ",
+                createdAt: Date(timeIntervalSince1970: 100),
+                updatedAt: Date(timeIntervalSince1970: 100)
+            )
+            let collection = try MediaCollection.validated(
+                id: collectionID,
+                name: " Weekend Watchlist ",
+                description: "Friday",
+                createdAt: Date(timeIntervalSince1970: 200),
+                updatedAt: Date(timeIntervalSince1970: 200)
+            )
+
+            try context.store.saveTag(tag)
+            try context.store.saveCollection(collection)
+            try context.store.assignTag(
+                tagID: tagID,
+                to: context.item.id,
+                assignedAt: Date(timeIntervalSince1970: 300)
+            )
+            try context.store.assignTag(
+                tagID: tagID,
+                to: context.item.id,
+                assignedAt: Date(timeIntervalSince1970: 400)
+            )
+            try context.store.setFavorite(
+                mediaItemID: context.item.id,
+                isFavorite: true,
+                updatedAt: Date(timeIntervalSince1970: 500)
+            )
+            try context.store.addMediaItem(
+                context.item.id,
+                toCollection: collectionID,
+                addedAt: Date(timeIntervalSince1970: 600)
+            )
+            try context.store.addMediaItem(
+                context.item.id,
+                toCollection: collectionID,
+                addedAt: Date(timeIntervalSince1970: 700)
+            )
+
+            let curation = try context.store.fetchMediaItemCuration(mediaItemID: context.item.id)
+            XCTAssertTrue(curation.isFavorite)
+            XCTAssertEqual(curation.tags.map(\.name), ["Sci Fi"])
+            XCTAssertEqual(curation.tags.map(\.mediaItemCount), [1])
+            XCTAssertEqual(curation.collections.map(\.name), ["Weekend Watchlist"])
+            XCTAssertEqual(curation.collections.map(\.mediaItemCount), [1])
+            XCTAssertEqual(try context.store.fetchTags().map(\.id), [tagID])
+            XCTAssertEqual(try context.store.fetchTag(normalizedName: "sci fi")?.id, tagID)
+            XCTAssertEqual(try context.store.fetchCollection(id: collectionID)?.description, "Friday")
+
+            itemID = context.item.id
+            otherItemID = otherItem.id
+        }
+
+        let reopened = try makeStore()
+        XCTAssertEqual(try reopened.fetchFavoriteMediaItemSummaries(limit: 10).map(\.id), [itemID])
+        XCTAssertEqual(try reopened.fetchMediaItemSummaries(tagID: tagID, limit: 10).map(\.id), [itemID])
+        XCTAssertEqual(
+            try reopened.fetchMediaItemSummaries(collectionID: collectionID, limit: 10).map(\.id),
+            [itemID]
+        )
+        XCTAssertEqual(
+            try reopened.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "", favorite: .favoritesOnly, limit: 10)
+            ).map(\.summary.id),
+            [itemID]
+        )
+        XCTAssertEqual(
+            try reopened.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "", tagID: tagID, limit: 10)
+            ).map(\.summary.id),
+            [itemID]
+        )
+        XCTAssertEqual(
+            try reopened.searchMediaItems(
+                query: PersistedMediaSearchQuery(text: "", tagID: "missing-tag", limit: 10)
+            ).map(\.summary.id),
+            []
+        )
+        XCTAssertEqual(try reopened.fetchMediaItem(id: otherItemID)?.title, "Moon")
+
+        try reopened.removeTag(tagID: tagID, from: itemID)
+        try reopened.setFavorite(
+            mediaItemID: itemID,
+            isFavorite: false,
+            updatedAt: Date(timeIntervalSince1970: 800)
+        )
+        try reopened.removeMediaItem(itemID, fromCollection: collectionID)
+        var curation = try reopened.fetchMediaItemCuration(mediaItemID: itemID)
+        XCTAssertFalse(curation.isFavorite)
+        XCTAssertEqual(curation.tags, [])
+        XCTAssertEqual(curation.collections, [])
+
+        try reopened.assignTag(tagID: tagID, to: itemID, assignedAt: Date(timeIntervalSince1970: 900))
+        try reopened.addMediaItem(itemID, toCollection: collectionID, addedAt: Date(timeIntervalSince1970: 1_000))
+        try reopened.deleteTag(id: tagID)
+        try reopened.deleteCollection(id: collectionID)
+        curation = try reopened.fetchMediaItemCuration(mediaItemID: itemID)
+        XCTAssertEqual(curation.tags, [])
+        XCTAssertEqual(curation.collections, [])
+        XCTAssertNotNil(try reopened.fetchMediaItem(id: itemID))
+    }
+
+    func testCurationRejectsDuplicateNormalizedTagAndCollectionNames() throws {
+        let store = try makeStore()
+        try store.saveTag(try Tag.validated(id: "tag-a", name: "Sci Fi"))
+        try store.saveCollection(try MediaCollection.validated(id: "collection-a", name: "Watchlist"))
+
+        XCTAssertThrowsError(try store.saveTag(try Tag.validated(id: "tag-b", name: "  sci   fi  "))) { error in
+            guard let persistenceError = error as? PersistenceError,
+                  case .stepFailed = persistenceError else {
+                return XCTFail("Expected stepFailed, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(
+            try store.saveCollection(try MediaCollection.validated(id: "collection-b", name: "watchlist"))
+        ) { error in
+            guard let persistenceError = error as? PersistenceError,
+                  case .stepFailed = persistenceError else {
+                return XCTFail("Expected stepFailed, got \(error)")
+            }
+        }
+    }
+
     func testMigrationV2RollbackPreventsPartialPlaybackHistorySchema() throws {
         do {
             _ = try makeStore()
@@ -628,6 +804,29 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertEqual(try RawSQLiteFixture.migrationVersions(path: databaseURL.path), [1, 2, 3])
         XCTAssertFalse(tableNames.contains("subtitle_assets"))
         XCTAssertTrue(tableNames.contains("idx_subtitle_assets_media_file_id"))
+    }
+
+    func testMigrationV6RollbackPreventsPartialCurationSchema() throws {
+        do {
+            _ = try makeStore()
+        }
+        try removeV6SchemaObjects()
+        try RawSQLiteFixture.execute(
+            path: databaseURL.path,
+            sql: "CREATE TABLE idx_media_item_tags_tag_id (id TEXT PRIMARY KEY)"
+        )
+
+        XCTAssertThrowsError(try makeStore()) { error in
+            guard let persistenceError = error as? PersistenceError,
+                  case .migrationFailed = persistenceError else {
+                return XCTFail("Expected migrationFailed, got \(error)")
+            }
+        }
+
+        let tableNames = Set(try RawSQLiteFixture.tableNames(path: databaseURL.path))
+        XCTAssertEqual(try RawSQLiteFixture.migrationVersions(path: databaseURL.path), [1, 2, 3, 4, 5])
+        XCTAssertTrue(tableNames.isDisjoint(with: curationTableNames))
+        XCTAssertTrue(tableNames.contains("idx_media_item_tags_tag_id"))
     }
 
     func testLibraryCoreRecordsPersistAcrossStoreReopen() throws {
@@ -2546,6 +2745,7 @@ final class PersistenceRepositoryTests: XCTestCase {
     }
 
     private func removeV5SchemaObjects() throws {
+        try removeV6SchemaObjects()
         try RawSQLiteFixture.execute(
             path: databaseURL.path,
             sql: """
@@ -2557,6 +2757,22 @@ final class PersistenceRepositoryTests: XCTestCase {
                 DROP TRIGGER IF EXISTS media_search_media_items_ai;
                 DROP TABLE IF EXISTS media_search_fts;
                 DELETE FROM schema_migrations WHERE version = 5;
+                """
+        )
+    }
+
+    private func removeV6SchemaObjects() throws {
+        try RawSQLiteFixture.execute(
+            path: databaseURL.path,
+            sql: """
+                DROP INDEX IF EXISTS idx_collection_items_media_item_id;
+                DROP INDEX IF EXISTS idx_media_item_tags_tag_id;
+                DROP TABLE IF EXISTS collection_items;
+                DROP TABLE IF EXISTS collections;
+                DROP TABLE IF EXISTS favorite_media_items;
+                DROP TABLE IF EXISTS media_item_tags;
+                DROP TABLE IF EXISTS tags;
+                DELETE FROM schema_migrations WHERE version = 6;
                 """
         )
     }
@@ -2638,6 +2854,14 @@ private let metadataTableNames: Set<String> = [
     "metadata_external_ids",
     "metadata_source_records",
     "poster_assets"
+]
+
+private let curationTableNames: Set<String> = [
+    "tags",
+    "media_item_tags",
+    "favorite_media_items",
+    "collections",
+    "collection_items"
 ]
 
 private enum SQLiteFixtureError: Error {
