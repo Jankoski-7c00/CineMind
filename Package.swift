@@ -8,6 +8,7 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .library(name: "AI", targets: ["AI"]),
         .library(name: "AppUI", targets: ["AppUI"]),
         .library(name: "Shared", targets: ["Shared"]),
         .library(name: "Domain", targets: ["Domain"]),
@@ -24,6 +25,7 @@ let package = Package(
         .executable(name: "CineMindMetadataShell", targets: ["CineMindMetadataShell"])
     ],
     targets: [
+        .target(name: "AI"),
         .target(
             name: "AppUI",
             dependencies: ["Application", "Domain", "Shared"]
@@ -65,7 +67,7 @@ let package = Package(
         ),
         .target(
             name: "Application",
-            dependencies: ["Domain", "Persistence", "Playback", "Metadata", "Subtitle", "Shared"]
+            dependencies: ["AI", "Domain", "Persistence", "Playback", "Metadata", "Subtitle", "Shared"]
         ),
         .executableTarget(
             name: "CineMindApp",
@@ -91,6 +93,10 @@ let package = Package(
             dependencies: ["Application", "Persistence", "Metadata", "Shared"]
         ),
         .testTarget(
+            name: "AITests",
+            dependencies: ["AI"]
+        ),
+        .testTarget(
             name: "DomainTests",
             dependencies: ["Domain"]
         ),
@@ -104,7 +110,7 @@ let package = Package(
         ),
         .testTarget(
             name: "ApplicationTests",
-            dependencies: ["Application"]
+            dependencies: ["AI", "Application"]
         ),
         .testTarget(
             name: "AppUITests",

@@ -145,8 +145,6 @@ public struct TMDBSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 300)
-        .scenePadding()
     }
 
     private var statusSystemImage: String {

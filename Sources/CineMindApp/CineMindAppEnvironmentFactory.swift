@@ -12,6 +12,7 @@ struct CineMindAppStartupEnvironment {
     let libraryExporter: any LibraryExporting
     let libraryExportDestinationPicker: any LibraryExportDestinationPicking
     let tmdbSettingsManager: any TMDBReadTokenSettingsManaging
+    let aiSettingsManager: any AISettingsManaging
 }
 
 final class CineMindPlaybackRuntime {
@@ -78,6 +79,10 @@ enum CineMindAppEnvironmentFactory {
             environmentToken: environment["CINEMIND_TMDB_READ_TOKEN"],
             metadataRuntime: metadataRuntime
         )
+        let aiSettingsManager = AISettingsService(
+            settingsStore: UserDefaultsAISettingsStore(),
+            providerAvailabilityReader: StaticAIProviderAvailabilityReader(.notConfigured)
+        )
         let subtitleActionConfiguration = makeSubtitleActions(
             store: store,
             playbackSubtitleRefresher: playbackRuntime?.controller
@@ -103,7 +108,8 @@ enum CineMindAppEnvironmentFactory {
             playbackRuntime: playbackRuntime,
             libraryExporter: libraryExporter,
             libraryExportDestinationPicker: libraryExportDestinationPicker,
-            tmdbSettingsManager: tmdbSettingsManager
+            tmdbSettingsManager: tmdbSettingsManager,
+            aiSettingsManager: aiSettingsManager
         )
     }
 

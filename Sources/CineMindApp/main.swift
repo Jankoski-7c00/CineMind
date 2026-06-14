@@ -7,6 +7,7 @@ struct CineMindApp: App {
     @StateObject private var viewModel = AppShellViewModel()
     @StateObject private var playbackKeyboardShortcuts = PlaybackKeyboardShortcutMonitor()
     @StateObject private var tmdbSettingsViewModel = TMDBSettingsViewModel()
+    @StateObject private var aiSettingsViewModel = AISettingsViewModel()
     @State private var playbackRuntime: CineMindPlaybackRuntime?
     @State private var libraryExporter: (any LibraryExporting)?
     @State private var libraryExportDestinationPicker: (any LibraryExportDestinationPicking)?
@@ -63,7 +64,10 @@ struct CineMindApp: App {
         }
 
         Settings {
-            TMDBSettingsView(viewModel: tmdbSettingsViewModel)
+            CineMindSettingsView(
+                tmdbViewModel: tmdbSettingsViewModel,
+                aiViewModel: aiSettingsViewModel
+            )
         }
     }
 
@@ -160,9 +164,11 @@ struct CineMindApp: App {
             libraryExporter = startup.libraryExporter
             libraryExportDestinationPicker = startup.libraryExportDestinationPicker
             tmdbSettingsViewModel.setManager(startup.tmdbSettingsManager)
+            aiSettingsViewModel.setManager(startup.aiSettingsManager)
             viewModel.markReady(environment: startup.appShellEnvironment)
         } catch {
             tmdbSettingsViewModel.setManager(nil)
+            aiSettingsViewModel.setManager(nil)
             viewModel.markFailed(
                 CineMindAppEnvironmentFactory.startupFailureMessage(for: error)
             )
