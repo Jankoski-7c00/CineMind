@@ -10,6 +10,8 @@ import Scanner
 struct CineMindAppStartupEnvironment {
     let appShellEnvironment: AppShellEnvironment
     let playbackRuntime: CineMindPlaybackRuntime?
+    let libraryExporter: any LibraryExporting
+    let libraryExportDestinationPicker: any LibraryExportDestinationPicking
 }
 
 final class CineMindPlaybackRuntime {
@@ -55,6 +57,8 @@ enum CineMindAppEnvironmentFactory {
         let folderAdder = AddLibraryFolderUseCase(store: store)
         let scanRunner = ScannerLibraryScanRunner(scanner: LibraryScanner(store: store))
         let libraryScanner = RunLibraryScanUseCase(store: store, runner: scanRunner)
+        let libraryExporter = LibraryExportUseCase(store: store)
+        let libraryExportDestinationPicker = AppKitLibraryExportDestinationPicker()
 
         let playbackRuntime = makePlaybackRuntime(store: store)
         let metadataActionConfiguration = makeMetadataActions(
@@ -84,7 +88,9 @@ enum CineMindAppEnvironmentFactory {
 
         return CineMindAppStartupEnvironment(
             appShellEnvironment: appShellEnvironment,
-            playbackRuntime: playbackRuntime
+            playbackRuntime: playbackRuntime,
+            libraryExporter: libraryExporter,
+            libraryExportDestinationPicker: libraryExportDestinationPicker
         )
     }
 
@@ -213,7 +219,9 @@ enum CineMindAppEnvironmentFactory {
             return "CineMind could not initialize its local library database."
         case .mediaFileMediaItemMismatch,
              .duplicatePlaybackHistoryPair,
-             .posterAssetNotFound:
+             .posterAssetNotFound,
+             .libraryExportUnavailable,
+             .libraryExportIntegrityViolation:
             return "CineMind could not initialize its local library data."
         }
     }

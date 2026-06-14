@@ -15,6 +15,8 @@ public enum PersistenceError: Error, Sendable, Equatable, CustomStringConvertibl
     )
     case duplicatePlaybackHistoryPair(existingID: String, attemptedID: String)
     case posterAssetNotFound(id: String, mediaItemID: String)
+    case libraryExportUnavailable
+    case libraryExportIntegrityViolation(String)
 
     public var description: String {
         switch self {
@@ -36,6 +38,10 @@ public enum PersistenceError: Error, Sendable, Equatable, CustomStringConvertibl
             "duplicatePlaybackHistoryPair(existingID: \(existingID), attemptedID: \(attemptedID))"
         case .posterAssetNotFound(let id, let mediaItemID):
             "posterAssetNotFound(id: \(id), mediaItemID: \(mediaItemID))"
+        case .libraryExportUnavailable:
+            "libraryExportUnavailable"
+        case .libraryExportIntegrityViolation(let message):
+            "libraryExportIntegrityViolation(\(message))"
         }
     }
 }
@@ -50,6 +56,7 @@ internal final class SQLiteConnection {
 
     private var handle: OpaquePointer?
     private var isInTransaction = false
+    private let accessLock = NSRecursiveLock()
 
     internal init(path: String, mode: OpenMode = .readWriteCreate) throws {
         var opened: OpaquePointer?
@@ -82,79 +89,134 @@ internal final class SQLiteConnection {
     }
 
     internal func execute(_ sql: String) throws {
-        let statement = try prepare(sql)
-        while try statement.step() {}
+        try withLock {
+            let statement = try prepare(sql)
+            while try statement.step() {}
+        }
     }
 
     internal func prepare(_ sql: String) throws -> SQLiteStatement {
-        var statement: OpaquePointer?
-        let result = sqlite3_prepare_v2(handle, sql, -1, &statement, nil)
-        guard result == SQLITE_OK, let statement else {
-            throw PersistenceError.prepareFailed(errorMessage)
+        try withLock {
+            var statement: OpaquePointer?
+            let result = sqlite3_prepare_v2(handle, sql, -1, &statement, nil)
+            guard result == SQLITE_OK, let statement else {
+                throw PersistenceError.prepareFailed(errorMessage)
+            }
+            return SQLiteStatement(connection: self, statement: statement)
         }
-        return SQLiteStatement(connection: self, statement: statement)
     }
 
     internal func begin() throws {
-        guard !isInTransaction else {
-            throw PersistenceError.transactionFailed("transaction already active")
+        try withLock {
+            guard !isInTransaction else {
+                throw PersistenceError.transactionFailed("transaction already active")
+            }
+            try execute("BEGIN IMMEDIATE TRANSACTION")
+            isInTransaction = true
         }
-        try execute("BEGIN IMMEDIATE TRANSACTION")
-        isInTransaction = true
+    }
+
+    internal func beginRead() throws {
+        try withLock {
+            guard !isInTransaction else {
+                throw PersistenceError.transactionFailed("transaction already active")
+            }
+            try execute("BEGIN DEFERRED TRANSACTION")
+            isInTransaction = true
+        }
     }
 
     internal func commit() throws {
-        guard isInTransaction else {
-            throw PersistenceError.transactionFailed("no active transaction")
-        }
-        do {
-            try execute("COMMIT")
-            isInTransaction = false
-        } catch {
-            isInTransaction = false
-            throw error
+        try withLock {
+            guard isInTransaction else {
+                throw PersistenceError.transactionFailed("no active transaction")
+            }
+            do {
+                try execute("COMMIT")
+                isInTransaction = false
+            } catch {
+                isInTransaction = false
+                throw error
+            }
         }
     }
 
     internal func rollback() throws {
-        guard isInTransaction else {
-            throw PersistenceError.transactionFailed("no active transaction")
-        }
-        do {
-            try execute("ROLLBACK")
-            isInTransaction = false
-        } catch {
-            isInTransaction = false
-            throw error
+        try withLock {
+            guard isInTransaction else {
+                throw PersistenceError.transactionFailed("no active transaction")
+            }
+            do {
+                try execute("ROLLBACK")
+                isInTransaction = false
+            } catch {
+                isInTransaction = false
+                throw error
+            }
         }
     }
 
     internal func transaction<T>(_ body: () throws -> T) throws -> T {
-        if isInTransaction {
-            return try body()
-        }
-
-        try begin()
-
-        do {
-            let value = try body()
-            try commit()
-            return value
-        } catch {
-            do {
-                try rollback()
-            } catch let rollbackError {
-                throw PersistenceError.transactionFailed(rollbackError.localizedDescription)
+        try withLock {
+            if isInTransaction {
+                return try body()
             }
-            throw error
+
+            try begin()
+
+            do {
+                let value = try body()
+                try commit()
+                return value
+            } catch {
+                do {
+                    try rollback()
+                } catch let rollbackError {
+                    throw PersistenceError.transactionFailed(rollbackError.localizedDescription)
+                }
+                throw error
+            }
+        }
+    }
+
+    internal func readTransaction<T>(_ body: () throws -> T) throws -> T {
+        try withLock {
+            if isInTransaction {
+                return try body()
+            }
+
+            try beginRead()
+
+            do {
+                let value = try body()
+                try commit()
+                return value
+            } catch {
+                do {
+                    try rollback()
+                } catch let rollbackError {
+                    throw PersistenceError.transactionFailed(rollbackError.localizedDescription)
+                }
+                throw error
+            }
         }
     }
 
     internal var errorMessage: String {
-        guard let handle else {
-            return "sqlite connection is closed"
+        withLock {
+            guard let handle else {
+                return "sqlite connection is closed"
+            }
+            return String(cString: sqlite3_errmsg(handle))
         }
-        return String(cString: sqlite3_errmsg(handle))
+    }
+
+    internal func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        accessLock.lock()
+        defer {
+            accessLock.unlock()
+        }
+        return try body()
     }
 }
 
@@ -180,19 +242,23 @@ internal final class SQLiteStatement {
 
     deinit {
         if let statement {
-            sqlite3_finalize(statement)
+            _ = connection.withLock {
+                sqlite3_finalize(statement)
+            }
         }
     }
 
     internal func bind(_ value: String?, at index: Int32) throws {
-        let result: Int32
-        if let value {
-            result = sqlite3_bind_text(statement, index, value, -1, sqliteTransient)
-        } else {
-            result = sqlite3_bind_null(statement, index)
-        }
-        guard result == SQLITE_OK else {
-            throw PersistenceError.bindFailed(connection.errorMessage)
+        try connection.withLock {
+            let result: Int32
+            if let value {
+                result = sqlite3_bind_text(statement, index, value, -1, sqliteTransient)
+            } else {
+                result = sqlite3_bind_null(statement, index)
+            }
+            guard result == SQLITE_OK else {
+                throw PersistenceError.bindFailed(connection.errorMessage)
+            }
         }
     }
 
@@ -205,26 +271,30 @@ internal final class SQLiteStatement {
     }
 
     internal func bind(_ value: Int64?, at index: Int32) throws {
-        let result: Int32
-        if let value {
-            result = sqlite3_bind_int64(statement, index, value)
-        } else {
-            result = sqlite3_bind_null(statement, index)
-        }
-        guard result == SQLITE_OK else {
-            throw PersistenceError.bindFailed(connection.errorMessage)
+        try connection.withLock {
+            let result: Int32
+            if let value {
+                result = sqlite3_bind_int64(statement, index, value)
+            } else {
+                result = sqlite3_bind_null(statement, index)
+            }
+            guard result == SQLITE_OK else {
+                throw PersistenceError.bindFailed(connection.errorMessage)
+            }
         }
     }
 
     internal func bind(_ value: Double?, at index: Int32) throws {
-        let result: Int32
-        if let value {
-            result = sqlite3_bind_double(statement, index, value)
-        } else {
-            result = sqlite3_bind_null(statement, index)
-        }
-        guard result == SQLITE_OK else {
-            throw PersistenceError.bindFailed(connection.errorMessage)
+        try connection.withLock {
+            let result: Int32
+            if let value {
+                result = sqlite3_bind_double(statement, index, value)
+            } else {
+                result = sqlite3_bind_null(statement, index)
+            }
+            guard result == SQLITE_OK else {
+                throw PersistenceError.bindFailed(connection.errorMessage)
+            }
         }
     }
 
@@ -233,76 +303,94 @@ internal final class SQLiteStatement {
     }
 
     internal func bind(_ value: Data?, at index: Int32) throws {
-        let result: Int32
-        if let value {
-            result = value.withUnsafeBytes { buffer in
-                sqlite3_bind_blob(statement, index, buffer.baseAddress, Int32(value.count), sqliteTransient)
+        try connection.withLock {
+            let result: Int32
+            if let value {
+                result = value.withUnsafeBytes { buffer in
+                    sqlite3_bind_blob(statement, index, buffer.baseAddress, Int32(value.count), sqliteTransient)
+                }
+            } else {
+                result = sqlite3_bind_null(statement, index)
             }
-        } else {
-            result = sqlite3_bind_null(statement, index)
-        }
-        guard result == SQLITE_OK else {
-            throw PersistenceError.bindFailed(connection.errorMessage)
+            guard result == SQLITE_OK else {
+                throw PersistenceError.bindFailed(connection.errorMessage)
+            }
         }
     }
 
     internal func bindNull(at index: Int32) throws {
-        guard sqlite3_bind_null(statement, index) == SQLITE_OK else {
-            throw PersistenceError.bindFailed(connection.errorMessage)
+        try connection.withLock {
+            guard sqlite3_bind_null(statement, index) == SQLITE_OK else {
+                throw PersistenceError.bindFailed(connection.errorMessage)
+            }
         }
     }
 
     internal func step() throws -> Bool {
-        let result = sqlite3_step(statement)
-        switch result {
-        case SQLITE_ROW:
-            return true
-        case SQLITE_DONE:
-            return false
-        default:
-            throw PersistenceError.stepFailed(connection.errorMessage)
+        try connection.withLock {
+            let result = sqlite3_step(statement)
+            switch result {
+            case SQLITE_ROW:
+                return true
+            case SQLITE_DONE:
+                return false
+            default:
+                throw PersistenceError.stepFailed(connection.errorMessage)
+            }
         }
     }
 
     internal func string(at index: Int32) -> String? {
-        guard sqlite3_column_type(statement, index) != SQLITE_NULL,
-              let text = sqlite3_column_text(statement, index) else {
-            return nil
+        connection.withLock {
+            guard sqlite3_column_type(statement, index) != SQLITE_NULL,
+                  let text = sqlite3_column_text(statement, index) else {
+                return nil
+            }
+            return String(cString: text)
         }
-        return String(cString: text)
     }
 
     internal func int(at index: Int32) -> Int? {
-        guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
-            return nil
+        connection.withLock {
+            guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
+                return nil
+            }
+            return Int(sqlite3_column_int64(statement, index))
         }
-        return Int(sqlite3_column_int64(statement, index))
     }
 
     internal func int64(at index: Int32) -> Int64? {
-        guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
-            return nil
+        connection.withLock {
+            guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
+                return nil
+            }
+            return sqlite3_column_int64(statement, index)
         }
-        return sqlite3_column_int64(statement, index)
     }
 
     internal func double(at index: Int32) -> Double? {
-        guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
-            return nil
+        connection.withLock {
+            guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
+                return nil
+            }
+            return sqlite3_column_double(statement, index)
         }
-        return sqlite3_column_double(statement, index)
     }
 
     internal func bool(at index: Int32) -> Bool {
-        sqlite3_column_int64(statement, index) != 0
+        connection.withLock {
+            sqlite3_column_int64(statement, index) != 0
+        }
     }
 
     internal func data(at index: Int32) -> Data? {
-        guard sqlite3_column_type(statement, index) != SQLITE_NULL,
-              let bytes = sqlite3_column_blob(statement, index) else {
-            return nil
+        connection.withLock {
+            guard sqlite3_column_type(statement, index) != SQLITE_NULL,
+                  let bytes = sqlite3_column_blob(statement, index) else {
+                return nil
+            }
+            let count = Int(sqlite3_column_bytes(statement, index))
+            return Data(bytes: bytes, count: count)
         }
-        let count = Int(sqlite3_column_bytes(statement, index))
-        return Data(bytes: bytes, count: count)
     }
 }

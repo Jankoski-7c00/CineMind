@@ -1,7 +1,7 @@
 import Domain
 import Foundation
 
-public final class CineMindStore {
+public final class CineMindStore: @unchecked Sendable {
     private let connection: SQLiteConnection
 
     public init(path: String) throws {
@@ -19,6 +19,10 @@ public final class CineMindStore {
 
     public func withTransaction<T>(_ body: () throws -> T) throws -> T {
         try connection.transaction(body)
+    }
+
+    internal func withReadTransaction<T>(_ body: () throws -> T) throws -> T {
+        try connection.readTransaction(body)
     }
 }
 

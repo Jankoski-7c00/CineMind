@@ -109,12 +109,6 @@ public protocol ApplicationLibraryMediaSummaryStore: Sendable {
     ) throws -> [PersistedMediaItemSummary]
 }
 
-extension CineMindStore: @unchecked Sendable {
-    // CineMindStore is a final class backed by SQLite (serialized via WAL).
-    // All Application use cases dispatch store access through a serial
-    // DispatchQueue, so cross-queue access is safe.
-}
-
 extension CineMindStore: ApplicationLibraryMediaSummaryStore {}
 
 public struct LibraryMediaSummaryUseCase: LibraryMediaSummaryBrowsing, Sendable {

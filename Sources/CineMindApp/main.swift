@@ -7,6 +7,10 @@ struct CineMindApp: App {
     @StateObject private var viewModel = AppShellViewModel()
     @StateObject private var playbackKeyboardShortcuts = PlaybackKeyboardShortcutMonitor()
     @State private var playbackRuntime: CineMindPlaybackRuntime?
+    @State private var libraryExporter: (any LibraryExporting)?
+    @State private var libraryExportDestinationPicker: (any LibraryExportDestinationPicking)?
+    @State private var isExportingLibrary = false
+    @State private var libraryExportAlert: LibraryExportAlert?
 
     var body: some Scene {
         WindowGroup {
@@ -22,8 +26,26 @@ struct CineMindApp: App {
                     )
                     startAppIfNeeded()
                 }
+                .alert(item: $libraryExportAlert) { alert in
+                    Alert(
+                        title: Text(alert.title),
+                        message: Text(alert.message),
+                        dismissButton: .default(Text("OK"))
+                    )
+                }
         }
         .commands {
+            CommandMenu("Library") {
+                Button("Export Library...") {
+                    exportLibrary()
+                }
+                .disabled(
+                    isExportingLibrary
+                        || libraryExporter == nil
+                        || libraryExportDestinationPicker == nil
+                )
+            }
+
             CommandMenu("Playback") {
                 Button("Toggle Play/Pause") {
                     togglePlayPause()
@@ -36,6 +58,42 @@ struct CineMindApp: App {
                 Button("Seek Forward 10 Seconds") {
                     seekRelative(byMS: 10_000)
                 }
+            }
+        }
+    }
+
+    @MainActor
+    private func exportLibrary() {
+        guard !isExportingLibrary,
+              let libraryExporter,
+              let libraryExportDestinationPicker else {
+            return
+        }
+
+        isExportingLibrary = true
+        Task { @MainActor in
+            defer {
+                isExportingLibrary = false
+            }
+
+            do {
+                guard let destinationPath = try await libraryExportDestinationPicker
+                    .pickLibraryExportDestination() else {
+                    return
+                }
+
+                let result = try await libraryExporter.exportLibrary(to: destinationPath)
+                let fileName = URL(fileURLWithPath: result.destinationPath).lastPathComponent
+                libraryExportAlert = LibraryExportAlert(
+                    title: "Library Exported",
+                    message: "Exported \(result.mediaItemCount) items to \(fileName). This JSON file is not a complete backup and cannot currently be imported."
+                )
+            } catch {
+                libraryExportAlert = LibraryExportAlert(
+                    title: "Export Failed",
+                    message: (error as? LocalizedError)?.errorDescription
+                        ?? "CineMind could not export the library."
+                )
             }
         }
     }
@@ -94,6 +152,8 @@ struct CineMindApp: App {
         do {
             let startup = try CineMindAppEnvironmentFactory.start()
             playbackRuntime = startup.playbackRuntime
+            libraryExporter = startup.libraryExporter
+            libraryExportDestinationPicker = startup.libraryExportDestinationPicker
             viewModel.markReady(environment: startup.appShellEnvironment)
         } catch {
             viewModel.markFailed(
@@ -101,6 +161,12 @@ struct CineMindApp: App {
             )
         }
     }
+}
+
+private struct LibraryExportAlert: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
 }
 
 @MainActor
