@@ -168,5 +168,8 @@ Phase 9 intentionally does not include:
 - vector storage or similarity search
 - subtitle summarization or recommendations
 
-The next AI phase requires a dedicated Phase 10 planning round and an explicit
-concrete embedding-provider decision.
+Roadmap update:
+
+- The next AI phase requires a dedicated planning round, an assigned phase
+  number, and an explicit concrete embedding-provider decision.
+- Phase 10 is reserved for the native macOS UI redesign.

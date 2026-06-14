@@ -178,8 +178,11 @@ AI must be:
 
 ### UI/UX
 
--   Better browsing
--   Improved filtering
+-   Native macOS sidebar, toolbar, search, inspector, menu, and keyboard behavior
+-   Artwork-led media browsing with poster grid and compact-list options
+-   Operational folder management through native table presentation
+-   Improved filtering and sorting without permanently occupying the content area
+-   System Light/Dark adaptation and core accessibility support
 
 ------------------------------------------------------------------------
 

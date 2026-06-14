@@ -109,7 +109,7 @@ Phase 9 must not assume or add:
 - an API token or credential format
 
 A concrete provider decision is not required to implement Phase 9. It is
-required before Phase 10 can deliver a real semantic-search workflow.
+required before a future semantic-search phase can deliver a real workflow.
 
 ## 1.4 Existing AI-Adjacent Coverage
 
@@ -446,8 +446,8 @@ swift test list
 Questions to answer before code:
 
 - Can the `AI` target remain dependency-free, or does it need only `Shared`?
-- Which provider capabilities are needed now to avoid redesign before Phase 10
-  without adding speculative provider features?
+- Which provider capabilities are needed now to avoid redesign before future
+  semantic-search work without adding speculative provider features?
 - Can a privacy-safe request type make raw paths and file hashes
   unrepresentable?
 - Should chat and embedding requests share a common approved-text wrapper, or
@@ -1092,8 +1092,8 @@ Mitigation:
 
 ## 13.8 Future Compatibility Risk
 
-Phase 10 may discover that a chosen provider needs details not represented by
-the Phase 9 contracts.
+A future AI phase may discover that a chosen provider needs details not
+represented by the Phase 9 contracts.
 
 Mitigation:
 
@@ -1133,8 +1133,9 @@ tag suggestion, or AI artifact persistence was added.
 
 # 15. Follow-Up Roadmap
 
-After Phase 9, the next AI phase should be Phase 10 Semantic Search, but only
-after a dedicated planning round answers:
+After Phase 9, semantic search remains the next AI capability, but its phase
+number is unassigned. It must begin only after a dedicated planning round
+answers:
 
 - Which concrete embedding provider is approved?
 - Is the first provider local, cloud, or both?
@@ -1146,8 +1147,8 @@ after a dedicated planning round answers:
 - How does semantic search fall back to keyword search?
 - How are semantic results combined with current filters and sorting?
 
-Phase 11 may then add automatic tag suggestion using the Phase 7 curation model
-and the Phase 9 chat/provider boundary.
+A later AI phase may then add automatic tag suggestion using the Phase 7
+curation model and the Phase 9 chat/provider boundary.
 
 Independent non-AI follow-ups remain:
 
@@ -1155,7 +1156,7 @@ Independent non-AI follow-ups remain:
 - basic TV series/season grouping
 - concrete online subtitle provider after explicit approval
 
-Do not bundle those independent follow-ups into Phase 9 or Phase 10.
+Do not bundle those independent follow-ups into Phase 9 or a future AI phase.
 
 ---
 

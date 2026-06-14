@@ -153,6 +153,34 @@ AppUI -> Metadata provider SDKs
 AppUI -> AI provider SDKs
 ```
 
+### macOS UI Structure Rules
+
+The current forward-looking UI contract is
+`docs/phase-10-native-macos-ui-redesign.md`.
+
+AppUI should prefer system desktop structures and behavior:
+
+- `NavigationSplitView` for stable sidebar, browser, and detail navigation
+- native toolbar, search, inspector, menu, contextual-menu, and keyboard paths
+- poster grid or compact list for media browsing
+- native table presentation for operational folder data
+- semantic system colors and system Light/Dark adaptation
+- focused detail overview with editing and technical information in an inspector
+
+AppUI should avoid:
+
+- forced color scheme as the product-wide visual foundation
+- custom-painted sidebar selection or toolbar chrome
+- decorative glass, gradients, strokes, shadows, or hover effects without a
+  functional purpose
+- one monolithic view owning navigation, presentation, editing, and command
+  routing
+- per-item detail reads for artwork-led summary browsing
+
+Use standard SwiftUI controls before introducing a custom component. Custom
+visual treatment must remain accessible, system-adaptive, and subordinate to
+the interaction hierarchy.
+
 ---
 
 ## 3.2 Domain
@@ -1791,10 +1819,14 @@ Strict recommended implementation order:
 14. Online subtitle search
 15. JSON export
 16. AI provider abstraction
-17. Semantic search
-18. AI tag suggestion
+17. Native macOS UI redesign
+18. Semantic search
+19. AI tag suggestion
 
-Do not start with AI, UI polish, subtitle downloads, or recommendations.
+Do not start with AI, decorative UI polish, subtitle downloads, or
+recommendations before the core shell and workflows exist. Once the workflows
+are stable, prefer a system-first native UI redesign over additional custom
+chrome.
 
 ---
 

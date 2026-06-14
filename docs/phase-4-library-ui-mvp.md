@@ -18,6 +18,14 @@ Completion audit:
 
 - [`Phase 4 Completion Report`](phase-4-completion-report.md)
 
+Current forward-looking UI direction:
+
+- [`Phase 10 Native macOS UI Redesign`](phase-10-native-macos-ui-redesign.md)
+
+Phase 4 and its subplans remain the historical contract for the first Library
+UI MVP. Phase 10 supersedes their forward-looking visual and interaction
+guidance without changing Phase 4 completion evidence.
+
 Phase 4 remains constrained by:
 
 - `CLAUDE.md`

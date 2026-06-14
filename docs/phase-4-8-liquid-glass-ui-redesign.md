@@ -2,6 +2,19 @@
 
 Canonical file: `docs/phase-4-8-liquid-glass-ui-redesign.md`
 
+> Historical design status:
+>
+> Phase 4.8 records the completed custom dark-glass redesign and its original
+> implementation contract. Its visual direction is no longer the current
+> forward-looking UI standard.
+>
+> [`Phase 10 Native macOS UI Redesign`](phase-10-native-macos-ui-redesign.md)
+> supersedes all future-facing Phase 4.8 and Phase 4.8H visual guidance. Do not
+> extend the custom Liquid Glass system, deepen the forced dark presentation,
+> or continue the deferred 4.8H polish plan. Preserve this document as
+> historical implementation and verification evidence until Phase 10 retires
+> or replaces the relevant code.
+
 Phase 4.8 upgrades the existing macOS SwiftUI UI from a functional debug-style shell into a darker, more cinematic media-library interface. The implementation remains AppUI-first, keeps existing data flow intact, and avoids new infrastructure, database, playback, metadata, scanner, subtitle, or third-party UI dependencies.
 
 ---
