@@ -71,6 +71,7 @@ fileprivate struct ReadyShellView: View {
     let playbackSurface: AnyView?
     @StateObject private var browserViewModel: LibraryBrowserViewModel
     @StateObject private var detailViewModel: LibraryItemDetailViewModel
+    @ObservedObject private var metadataActionsState: LibraryMetadataActionsState
 
     init(
         environment: AppShellEnvironment,
@@ -78,11 +79,12 @@ fileprivate struct ReadyShellView: View {
     ) {
         self.environment = environment
         self.playbackSurface = playbackSurface
+        _metadataActionsState = ObservedObject(wrappedValue: environment.metadataActionsState)
         let detailViewModel = LibraryItemDetailViewModel(
             detailBrowser: environment.itemDetailBrowser,
             playbackController: environment.playbackController,
-            metadataActions: environment.metadataActions,
-            metadataActionsUnavailableMessage: environment.metadataActionsUnavailableMessage,
+            metadataActions: environment.metadataActionsState.actions,
+            metadataActionsUnavailableMessage: environment.metadataActionsState.unavailableMessage,
             curationActions: environment.curationHandler,
             subtitleActions: environment.subtitleActions,
             subtitleActionsUnavailableMessage: environment.subtitleActionsUnavailableMessage
@@ -131,6 +133,12 @@ fileprivate struct ReadyShellView: View {
                         await browserViewModel.reloadCurationSnapshot()
                         await browserViewModel.reloadCurrentSection()
                     }
+                }
+                .onChange(of: metadataActionsState.revision) { _, _ in
+                    detailViewModel.setMetadataActions(
+                        metadataActionsState.actions,
+                        unavailableMessage: metadataActionsState.unavailableMessage
+                    )
                 }
         }
     }

@@ -69,7 +69,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "CineMindApp",
-            dependencies: ["AppUI", "Application", "Metadata", "Playback", "PlaybackAVFoundation", "Persistence", "Scanner", "Shared"]
+            dependencies: ["AppUI", "Application", "Metadata", "Playback", "PlaybackAVFoundation", "Persistence", "Scanner", "Shared"],
+            linkerSettings: [
+                .linkedFramework("Security")
+            ]
         ),
         .executableTarget(
             name: "CineMindShell",
@@ -102,6 +105,10 @@ let package = Package(
         .testTarget(
             name: "ApplicationTests",
             dependencies: ["Application"]
+        ),
+        .testTarget(
+            name: "AppUITests",
+            dependencies: ["AppUI", "Application", "Domain"]
         ),
         .testTarget(
             name: "PlaybackTests",

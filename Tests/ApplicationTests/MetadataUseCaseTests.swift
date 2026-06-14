@@ -238,7 +238,7 @@ final class MetadataUseCaseTests: XCTestCase {
         } catch let error as LibraryMetadataActionError {
             XCTAssertEqual(
                 error.message,
-                "TMDB read token is missing. Set CINEMIND_TMDB_READ_TOKEN and restart CineMind."
+                "TMDB read token is missing. Open CineMind Settings to configure it."
             )
         } catch {
             XCTFail("Expected LibraryMetadataActionError, got \(error).")

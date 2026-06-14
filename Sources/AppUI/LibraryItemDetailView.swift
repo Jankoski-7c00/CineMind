@@ -91,8 +91,8 @@ public final class LibraryItemDetailViewModel: ObservableObject {
 
     private let detailBrowser: any LibraryItemDetailBrowsing
     private let posterImageLoader: any PosterImageLoading
-    private let metadataActions: (any LibraryMetadataActionHandling)?
-    public let metadataActionsUnavailableMessage: String?
+    private var metadataActions: (any LibraryMetadataActionHandling)?
+    @Published public private(set) var metadataActionsUnavailableMessage: String?
     private let curationActions: (any LibraryCurationHandling)?
     private let subtitleActions: (any LibrarySubtitleActionHandling)?
     public let subtitleActionsUnavailableMessage: String?
@@ -199,6 +199,17 @@ public final class LibraryItemDetailViewModel: ObservableObject {
 
     public var metadataActionsAvailable: Bool {
         metadataActions != nil
+    }
+
+    public func setMetadataActions(
+        _ actions: (any LibraryMetadataActionHandling)?,
+        unavailableMessage: String?
+    ) {
+        metadataActions = actions
+        metadataActionsUnavailableMessage = unavailableMessage
+        metadataActionStatus = .idle
+        metadataCandidates = []
+        isSearchingMetadataCandidates = false
     }
 
     public var curationActionsAvailable: Bool {
@@ -1307,7 +1318,7 @@ public struct LibraryItemDetailView: View {
     private var metadataUnavailableCallout: some View {
         Label(
             viewModel.metadataActionsUnavailableMessage
-                ?? "Set CINEMIND_TMDB_READ_TOKEN to enable online metadata matching.",
+                ?? "Open CineMind Settings to configure online metadata matching.",
             systemImage: "exclamationmark.circle"
         )
         .font(.callout)

@@ -6,6 +6,7 @@ import SwiftUI
 struct CineMindApp: App {
     @StateObject private var viewModel = AppShellViewModel()
     @StateObject private var playbackKeyboardShortcuts = PlaybackKeyboardShortcutMonitor()
+    @StateObject private var tmdbSettingsViewModel = TMDBSettingsViewModel()
     @State private var playbackRuntime: CineMindPlaybackRuntime?
     @State private var libraryExporter: (any LibraryExporting)?
     @State private var libraryExportDestinationPicker: (any LibraryExportDestinationPicking)?
@@ -59,6 +60,10 @@ struct CineMindApp: App {
                     seekRelative(byMS: 10_000)
                 }
             }
+        }
+
+        Settings {
+            TMDBSettingsView(viewModel: tmdbSettingsViewModel)
         }
     }
 
@@ -154,8 +159,10 @@ struct CineMindApp: App {
             playbackRuntime = startup.playbackRuntime
             libraryExporter = startup.libraryExporter
             libraryExportDestinationPicker = startup.libraryExportDestinationPicker
+            tmdbSettingsViewModel.setManager(startup.tmdbSettingsManager)
             viewModel.markReady(environment: startup.appShellEnvironment)
         } catch {
+            tmdbSettingsViewModel.setManager(nil)
             viewModel.markFailed(
                 CineMindAppEnvironmentFactory.startupFailureMessage(for: error)
             )

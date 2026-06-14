@@ -11,8 +11,7 @@ public struct AppShellEnvironment {
     public let folderAdder: any LibraryFolderAdding
     public let libraryScanner: any LibraryScanning
     public let playbackController: (any PlaybackApplicationControlling)?
-    public let metadataActions: (any LibraryMetadataActionHandling)?
-    public let metadataActionsUnavailableMessage: String?
+    public let metadataActionsState: LibraryMetadataActionsState
     public let subtitleActions: (any LibrarySubtitleActionHandling)?
     public let subtitleActionsUnavailableMessage: String?
 
@@ -27,8 +26,7 @@ public struct AppShellEnvironment {
         folderAdder: any LibraryFolderAdding,
         libraryScanner: any LibraryScanning,
         playbackController: (any PlaybackApplicationControlling)? = nil,
-        metadataActions: (any LibraryMetadataActionHandling)? = nil,
-        metadataActionsUnavailableMessage: String? = nil,
+        metadataActionsState: LibraryMetadataActionsState,
         subtitleActions: (any LibrarySubtitleActionHandling)? = nil,
         subtitleActionsUnavailableMessage: String? = nil
     ) {
@@ -42,8 +40,7 @@ public struct AppShellEnvironment {
         self.folderAdder = folderAdder
         self.libraryScanner = libraryScanner
         self.playbackController = playbackController
-        self.metadataActions = metadataActions
-        self.metadataActionsUnavailableMessage = metadataActionsUnavailableMessage
+        self.metadataActionsState = metadataActionsState
         self.subtitleActions = subtitleActions
         self.subtitleActionsUnavailableMessage = subtitleActionsUnavailableMessage
     }

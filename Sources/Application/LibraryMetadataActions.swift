@@ -263,7 +263,7 @@ public final class LibraryMetadataActionService: LibraryMetadataActionHandling, 
     private func message(for error: MetadataError) -> String {
         switch error {
         case .missingToken:
-            "TMDB read token is missing. Set CINEMIND_TMDB_READ_TOKEN and restart CineMind."
+            "TMDB read token is missing. Open CineMind Settings to configure it."
         case .unauthorized:
             "TMDB rejected the configured token."
         case .notFound:

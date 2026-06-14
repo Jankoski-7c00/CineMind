@@ -1,7 +1,6 @@
 import AppUI
 import Application
 import Foundation
-import Metadata
 import Playback
 import PlaybackAVFoundation
 import Persistence
@@ -12,6 +11,7 @@ struct CineMindAppStartupEnvironment {
     let playbackRuntime: CineMindPlaybackRuntime?
     let libraryExporter: any LibraryExporting
     let libraryExportDestinationPicker: any LibraryExportDestinationPicking
+    let tmdbSettingsManager: any TMDBReadTokenSettingsManaging
 }
 
 final class CineMindPlaybackRuntime {
@@ -40,6 +40,7 @@ final class CineMindPlaybackRuntime {
 }
 
 enum CineMindAppEnvironmentFactory {
+    @MainActor
     static func start() throws -> CineMindAppStartupEnvironment {
         let appDirectoryURL = try appDirectoryURL()
         let databaseURL = appDirectoryURL.appendingPathComponent(
@@ -61,9 +62,21 @@ enum CineMindAppEnvironmentFactory {
         let libraryExportDestinationPicker = AppKitLibraryExportDestinationPicker()
 
         let playbackRuntime = makePlaybackRuntime(store: store)
-        let metadataActionConfiguration = makeMetadataActions(
+        let environment = ProcessInfo.processInfo.environment
+        let configuredLanguage = environment["CINEMIND_TMDB_LANGUAGE"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let language = configuredLanguage.isEmpty ? "en-US" : configuredLanguage
+        let metadataActionsState = LibraryMetadataActionsState()
+        let metadataRuntime = TMDBMetadataRuntime(
             store: store,
-            appDirectoryURL: appDirectoryURL
+            appDirectoryURL: appDirectoryURL,
+            language: language,
+            actionsState: metadataActionsState
+        )
+        let tmdbSettingsManager = TMDBReadTokenSettingsService(
+            tokenStore: KeychainTMDBReadTokenStore(),
+            environmentToken: environment["CINEMIND_TMDB_READ_TOKEN"],
+            metadataRuntime: metadataRuntime
         )
         let subtitleActionConfiguration = makeSubtitleActions(
             store: store,
@@ -80,8 +93,7 @@ enum CineMindAppEnvironmentFactory {
             folderAdder: folderAdder,
             libraryScanner: libraryScanner,
             playbackController: playbackRuntime?.controller,
-            metadataActions: metadataActionConfiguration.actions,
-            metadataActionsUnavailableMessage: metadataActionConfiguration.unavailableMessage,
+            metadataActionsState: metadataActionsState,
             subtitleActions: subtitleActionConfiguration.actions,
             subtitleActionsUnavailableMessage: subtitleActionConfiguration.unavailableMessage
         )
@@ -90,56 +102,8 @@ enum CineMindAppEnvironmentFactory {
             appShellEnvironment: appShellEnvironment,
             playbackRuntime: playbackRuntime,
             libraryExporter: libraryExporter,
-            libraryExportDestinationPicker: libraryExportDestinationPicker
-        )
-    }
-
-    private static func makeMetadataActions(
-        store: CineMindStore,
-        appDirectoryURL: URL
-    ) -> MetadataActionConfiguration {
-        let environment = ProcessInfo.processInfo.environment
-        let token = environment["CINEMIND_TMDB_READ_TOKEN"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !token.isEmpty else {
-            return MetadataActionConfiguration(
-                actions: nil,
-                unavailableMessage: "Set CINEMIND_TMDB_READ_TOKEN to enable metadata actions."
-            )
-        }
-
-        let language = environment["CINEMIND_TMDB_LANGUAGE"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nonEmptyValue ?? "en-US"
-        let httpClient = URLSessionMetadataHTTPClient()
-        let provider = TMDBMetadataProvider(
-            configuration: TMDBMetadataProvider.Configuration(
-                bearerToken: token,
-                defaultLanguage: language
-            ),
-            httpClient: httpClient
-        )
-        let posterCache = LazyTMDBPosterCache(
-            provider: provider,
-            posterCache: PosterCache(
-                configuration: PosterCacheConfiguration(
-                    cacheRoot: appDirectoryURL.appendingPathComponent(
-                        "PosterCache",
-                        isDirectory: true
-                    )
-                ),
-                httpClient: httpClient
-            )
-        )
-
-        return MetadataActionConfiguration(
-            actions: LibraryMetadataActionService(
-                store: store,
-                provider: provider,
-                posterCache: posterCache,
-                language: language
-            ),
-            unavailableMessage: nil
+            libraryExportDestinationPicker: libraryExportDestinationPicker,
+            tmdbSettingsManager: tmdbSettingsManager
         )
     }
 
@@ -231,63 +195,7 @@ enum CineMindAppEnvironmentFactory {
     }
 }
 
-private struct MetadataActionConfiguration {
-    let actions: (any LibraryMetadataActionHandling)?
-    let unavailableMessage: String?
-}
-
 private struct SubtitleActionConfiguration {
     let actions: (any LibrarySubtitleActionHandling)?
     let unavailableMessage: String?
-}
-
-private final class LazyTMDBPosterCache: ApplicationPosterCaching, @unchecked Sendable {
-    private let provider: TMDBMetadataProvider
-    private let posterCache: PosterCache
-    private var imageConfiguration: TMDBImageConfiguration?
-
-    init(provider: TMDBMetadataProvider, posterCache: PosterCache) {
-        self.provider = provider
-        self.posterCache = posterCache
-    }
-
-    func cache(_ image: RemoteImage) async throws -> PosterCacheResult {
-        let configuration: TMDBImageConfiguration
-        if let cachedConfiguration = imageConfiguration {
-            configuration = cachedConfiguration
-        } else {
-            let fetchedConfiguration = try await provider.fetchImageConfiguration()
-            imageConfiguration = fetchedConfiguration
-            configuration = fetchedConfiguration
-        }
-
-        return try await posterCache.cache(image, using: configuration)
-    }
-}
-
-private final class URLSessionMetadataHTTPClient: MetadataHTTPClient {
-    func send(_ request: URLRequest) async throws -> MetadataHTTPResponse {
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw SanitizedHTTPClientError.invalidResponse
-            }
-            return MetadataHTTPResponse(statusCode: httpResponse.statusCode, data: data)
-        } catch let error as SanitizedHTTPClientError {
-            throw error
-        } catch {
-            throw SanitizedHTTPClientError.transportFailure
-        }
-    }
-}
-
-private enum SanitizedHTTPClientError: Error {
-    case invalidResponse
-    case transportFailure
-}
-
-private extension String {
-    var nonEmptyValue: String? {
-        isEmpty ? nil : self
-    }
 }
