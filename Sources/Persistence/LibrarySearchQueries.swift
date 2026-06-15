@@ -145,7 +145,7 @@ extension CineMindStore {
             results.append(
                 PersistedMediaSearchResult(
                     summary: try mapMediaItemSummary(statement),
-                    rank: statement.double(at: 16),
+                    rank: statement.double(at: 17),
                     matchReason: nil
                 )
             )

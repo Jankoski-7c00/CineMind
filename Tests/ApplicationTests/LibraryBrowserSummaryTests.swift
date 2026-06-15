@@ -341,7 +341,8 @@ final class LibraryBrowserSummaryTests: XCTestCase {
                     id: "favorite",
                     mediaType: .movie,
                     isFavorite: true,
-                    tagLabels: ["Sci Fi", "Weekend"]
+                    tagLabels: ["Sci Fi", "Weekend"],
+                    selectedPosterLocalCachePath: "/cache/arrival.jpg"
                 )
             ]
         )
@@ -351,6 +352,7 @@ final class LibraryBrowserSummaryTests: XCTestCase {
 
         XCTAssertTrue(item.isFavorite)
         XCTAssertEqual(item.tagLabels, ["Sci Fi", "Weekend"])
+        XCTAssertEqual(item.selectedPosterLocalCachePath, "/cache/arrival.jpg")
     }
 
     func testDefaultLastPlayedLabelIsDeterministic() async throws {
@@ -560,7 +562,8 @@ private func makeSummary(
     hasMetadataSourceRecord: Bool = false,
     latestPlayedAt: Date? = nil,
     isFavorite: Bool = false,
-    tagLabels: [String] = []
+    tagLabels: [String] = [],
+    selectedPosterLocalCachePath: String? = nil
 ) -> PersistedMediaItemSummary {
     PersistedMediaItemSummary(
         id: id,
@@ -578,6 +581,7 @@ private func makeSummary(
         hasMetadataSourceRecord: hasMetadataSourceRecord,
         latestPlayedAt: latestPlayedAt,
         isFavorite: isFavorite,
-        tagLabels: tagLabels
+        tagLabels: tagLabels,
+        selectedPosterLocalCachePath: selectedPosterLocalCachePath
     )
 }

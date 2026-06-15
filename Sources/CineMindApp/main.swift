@@ -13,6 +13,7 @@ struct CineMindApp: App {
     @State private var libraryExportDestinationPicker: (any LibraryExportDestinationPicking)?
     @State private var isExportingLibrary = false
     @State private var libraryExportAlert: LibraryExportAlert?
+    @FocusedValue(\.libraryCommandActions) private var libraryCommandActions
 
     var body: some Scene {
         WindowGroup {
@@ -38,6 +39,32 @@ struct CineMindApp: App {
         }
         .commands {
             CommandMenu("Library") {
+                Button("Add Folder") {
+                    libraryCommandActions?.addFolder()
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .disabled(!(libraryCommandActions?.canAddFolder ?? false))
+
+                Button("Scan Library") {
+                    libraryCommandActions?.scanLibrary()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(!(libraryCommandActions?.canScanLibrary ?? false))
+
+                Button("Toggle Grid/List") {
+                    libraryCommandActions?.togglePresentation()
+                }
+                .keyboardShortcut("g", modifiers: [.command, .option])
+                .disabled(!(libraryCommandActions?.canTogglePresentation ?? false))
+
+                Button("Toggle Inspector") {
+                    libraryCommandActions?.toggleInspector()
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .disabled(libraryCommandActions == nil)
+
+                Divider()
+
                 Button("Export Library...") {
                     exportLibrary()
                 }

@@ -18,6 +18,7 @@ public struct PersistedMediaItemSummary: Sendable, Equatable {
     public let latestPlayedAt: Date?
     public let isFavorite: Bool
     public let tagLabels: [String]
+    public let selectedPosterLocalCachePath: String?
 
     public init(
         id: MediaItemID,
@@ -35,7 +36,8 @@ public struct PersistedMediaItemSummary: Sendable, Equatable {
         hasMetadataSourceRecord: Bool = false,
         latestPlayedAt: Date? = nil,
         isFavorite: Bool = false,
-        tagLabels: [String] = []
+        tagLabels: [String] = [],
+        selectedPosterLocalCachePath: String? = nil
     ) {
         self.id = id
         self.mediaType = mediaType
@@ -53,6 +55,7 @@ public struct PersistedMediaItemSummary: Sendable, Equatable {
         self.latestPlayedAt = latestPlayedAt
         self.isFavorite = isFavorite
         self.tagLabels = tagLabels
+        self.selectedPosterLocalCachePath = selectedPosterLocalCachePath
     }
 }
 
@@ -149,7 +152,8 @@ extension CineMindStore {
             hasMetadataSourceRecord: try requiredSummaryBool(statement, 12),
             latestPlayedAt: decodePersistenceDate(statement.double(at: 13)),
             isFavorite: try requiredSummaryBool(statement, 14),
-            tagLabels: statement.string(at: 15).map(splitTagLabels) ?? []
+            tagLabels: statement.string(at: 15).map(splitTagLabels) ?? [],
+            selectedPosterLocalCachePath: statement.string(at: 16)
         )
     }
 }
@@ -234,6 +238,13 @@ internal let mediaItemSummaryCommonCTESQL = """
                GROUP_CONCAT(ordered_tag_labels.name, '\(mediaItemTagLabelSeparator)') AS tag_labels
         FROM ordered_tag_labels
         GROUP BY ordered_tag_labels.media_item_id
+    ),
+    selected_poster AS (
+        SELECT poster_assets.media_item_id,
+               poster_assets.local_cache_path
+        FROM poster_assets
+        WHERE poster_assets.asset_type = 'poster'
+          AND poster_assets.is_selected = 1
     )
     """
 
@@ -253,7 +264,8 @@ internal let mediaItemSummarySelectColumnsSQL = """
            COALESCE(metadata_source_presence.has_metadata_source_record, 0) AS has_metadata_source_record,
            latest_playback.latest_played_at,
            COALESCE(favorite_presence.is_favorite, 0) AS is_favorite,
-           tag_label_summary.tag_labels
+           tag_label_summary.tag_labels,
+           selected_poster.local_cache_path AS selected_poster_local_cache_path
     """
 
 internal let mediaItemSummaryJoinSQL = """
@@ -269,6 +281,8 @@ internal let mediaItemSummaryJoinSQL = """
       ON favorite_presence.media_item_id = media_items.id
     LEFT JOIN tag_label_summary
       ON tag_label_summary.media_item_id = media_items.id
+    LEFT JOIN selected_poster
+      ON selected_poster.media_item_id = media_items.id
     """
 
 private let mediaItemTagLabelSeparator = "\u{1F}"

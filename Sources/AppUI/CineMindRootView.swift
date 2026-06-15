@@ -23,7 +23,6 @@ public struct CineMindRootView: View {
                 errorView(message)
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     private var loadingView: some View {
@@ -72,6 +71,12 @@ fileprivate struct ReadyShellView: View {
     @StateObject private var browserViewModel: LibraryBrowserViewModel
     @StateObject private var detailViewModel: LibraryItemDetailViewModel
     @ObservedObject private var metadataActionsState: LibraryMetadataActionsState
+    @SceneStorage("CineMind.libraryBrowserPresentationMode")
+    private var browserPresentationModeRawValue = LibraryBrowserPresentationMode.grid.rawValue
+    @SceneStorage("CineMind.isInspectorPresented")
+    private var isInspectorPresented = false
+    @SceneStorage("CineMind.inspectorSection")
+    private var inspectorSectionRawValue = LibraryInspectorSection.info.rawValue
 
     init(
         environment: AppShellEnvironment,
@@ -115,11 +120,13 @@ fileprivate struct ReadyShellView: View {
                 collections: browserViewModel.curationSnapshot.collections
             )
         } content: {
-            LibraryBrowserView(viewModel: browserViewModel)
+            LibraryBrowserView(
+                viewModel: browserViewModel,
+                presentationMode: browserPresentationMode
+            )
         } detail: {
             LibraryItemDetailView(
                 viewModel: detailViewModel,
-                curationSnapshot: browserViewModel.curationSnapshot,
                 playbackSurface: playbackSurface
             )
                 .onChange(of: browserViewModel.selectedItemID) { _, newID in
@@ -141,6 +148,74 @@ fileprivate struct ReadyShellView: View {
                     )
                 }
         }
+        .searchable(
+            text: $browserViewModel.searchText,
+            placement: .toolbar,
+            prompt: "Search Library"
+        )
+        .toolbar {
+            LibraryBrowserToolbarContent(
+                viewModel: browserViewModel,
+                presentationMode: browserPresentationMode,
+                isInspectorPresented: $isInspectorPresented
+            )
+        }
+        .inspector(isPresented: $isInspectorPresented) {
+            LibraryItemInspectorView(
+                viewModel: detailViewModel,
+                curationSnapshot: browserViewModel.curationSnapshot,
+                selectedSection: inspectorSection
+            )
+            .inspectorColumnWidth(min: 280, ideal: 340, max: 440)
+        }
+        .focusedValue(\.libraryCommandActions, libraryCommandActions)
+    }
+
+    private var browserPresentationMode: Binding<LibraryBrowserPresentationMode> {
+        Binding(
+            get: {
+                LibraryBrowserPresentationMode(rawValue: browserPresentationModeRawValue) ?? .grid
+            },
+            set: { browserPresentationModeRawValue = $0.rawValue }
+        )
+    }
+
+    private var inspectorSection: Binding<LibraryInspectorSection> {
+        Binding(
+            get: {
+                LibraryInspectorSection(rawValue: inspectorSectionRawValue) ?? .info
+            },
+            set: { inspectorSectionRawValue = $0.rawValue }
+        )
+    }
+
+    private var libraryCommandActions: LibraryCommandActions {
+        let presentationMode = browserPresentationMode
+        let inspectorPresented = $isInspectorPresented
+        let workflowIsBusy = browserViewModel.isAddingFolder || browserViewModel.isScanning
+        let canTogglePresentation = browserViewModel.selectedSection != .folders
+            || browserViewModel.isSearchActive
+
+        return LibraryCommandActions(
+            canAddFolder: !workflowIsBusy,
+            canScanLibrary: !workflowIsBusy,
+            canTogglePresentation: canTogglePresentation,
+            addFolder: {
+                Task { await browserViewModel.addFolder() }
+            },
+            scanLibrary: {
+                Task { await browserViewModel.scanLibrary() }
+            },
+            togglePresentation: {
+                guard canTogglePresentation else { return }
+                presentationMode.wrappedValue = presentationMode.wrappedValue == .grid
+                    ? .list
+                    : .grid
+            },
+            toggleInspector: {
+                inspectorPresented.wrappedValue.toggle()
+            }
+        )
     }
 }
 

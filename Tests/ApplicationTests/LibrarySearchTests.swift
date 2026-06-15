@@ -127,7 +127,8 @@ final class LibrarySearchTests: XCTestCase {
                         availableFileCount: 1,
                         hasMetadataItem: true,
                         hasMetadataSourceRecord: true,
-                        latestPlayedAt: Date(timeIntervalSince1970: 1_000)
+                        latestPlayedAt: Date(timeIntervalSince1970: 1_000),
+                        selectedPosterLocalCachePath: "/cache/arrival.jpg"
                     ),
                     rank: -1.0
                 )
@@ -150,6 +151,7 @@ final class LibrarySearchTests: XCTestCase {
         XCTAssertEqual(snapshot.items[0].availabilityLabel, "available")
         XCTAssertEqual(snapshot.items[0].metadataLabel, "complete")
         XCTAssertEqual(snapshot.items[0].lastPlayedLabel, "played:1000")
+        XCTAssertEqual(snapshot.items[0].selectedPosterLocalCachePath, "/cache/arrival.jpg")
     }
 
     func testStoreErrorPropagates() async throws {
@@ -269,7 +271,8 @@ private func makeSearchSummary(
     unavailableFileCount: Int = 0,
     hasMetadataItem: Bool = false,
     hasMetadataSourceRecord: Bool = false,
-    latestPlayedAt: Date? = nil
+    latestPlayedAt: Date? = nil,
+    selectedPosterLocalCachePath: String? = nil
 ) -> PersistedMediaItemSummary {
     PersistedMediaItemSummary(
         id: id,
@@ -285,6 +288,7 @@ private func makeSearchSummary(
         unavailableFileCount: unavailableFileCount,
         hasMetadataItem: hasMetadataItem,
         hasMetadataSourceRecord: hasMetadataSourceRecord,
-        latestPlayedAt: latestPlayedAt
+        latestPlayedAt: latestPlayedAt,
+        selectedPosterLocalCachePath: selectedPosterLocalCachePath
     )
 }

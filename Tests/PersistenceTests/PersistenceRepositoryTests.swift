@@ -385,11 +385,26 @@ final class PersistenceRepositoryTests: XCTestCase {
                 summary: "Linguistics unlocks an alien language."
             )
         )
+        try store.savePosterAsset(
+            try PosterAsset.validated(
+                id: "search-arrival-poster",
+                mediaItemID: movie.id,
+                assetType: .poster,
+                source: .tmdb,
+                remotePath: "/arrival.jpg",
+                preferredCacheSize: "w500",
+                localCachePath: "/cache/search-arrival.jpg",
+                isSelected: true
+            )
+        )
 
+        let arrivalResults = try store.searchMediaItems(
+            query: PersistedMediaSearchQuery(text: "Arrival", limit: 10)
+        )
+        XCTAssertEqual(arrivalResults.map(\.summary.id), [movie.id])
         XCTAssertEqual(
-            try store.searchMediaItems(query: PersistedMediaSearchQuery(text: "Arrival", limit: 10))
-                .map(\.summary.id),
-            [movie.id]
+            arrivalResults.first?.summary.selectedPosterLocalCachePath,
+            "/cache/search-arrival.jpg"
         )
         XCTAssertEqual(
             try store.searchMediaItems(query: PersistedMediaSearchQuery(text: "Expanse", limit: 10))
@@ -1991,6 +2006,18 @@ final class PersistenceRepositoryTests: XCTestCase {
                 matchSource: .automatic
             )
         )
+        try store.savePosterAsset(
+            try PosterAsset.validated(
+                id: "summary-arrival-poster",
+                mediaItemID: arrival.id,
+                assetType: .poster,
+                source: .tmdb,
+                remotePath: "/arrival.jpg",
+                preferredCacheSize: "w500",
+                localCachePath: "/cache/arrival.jpg",
+                isSelected: true
+            )
+        )
 
         let summaries = try store.fetchMediaItemSummaries(mediaType: nil, limit: 10)
 
@@ -2010,6 +2037,7 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertTrue(arrivalSummary.hasMetadataItem)
         XCTAssertTrue(arrivalSummary.hasMetadataSourceRecord)
         XCTAssertEqual(arrivalSummary.latestPlayedAt, newerPlayedAt)
+        XCTAssertEqual(arrivalSummary.selectedPosterLocalCachePath, "/cache/arrival.jpg")
 
         let moonSummary = try XCTUnwrap(summaries.first { $0.id == moon.id })
         XCTAssertEqual(moonSummary.totalFileCount, 0)
@@ -2018,6 +2046,7 @@ final class PersistenceRepositoryTests: XCTestCase {
         XCTAssertFalse(moonSummary.hasMetadataItem)
         XCTAssertFalse(moonSummary.hasMetadataSourceRecord)
         XCTAssertNil(moonSummary.latestPlayedAt)
+        XCTAssertNil(moonSummary.selectedPosterLocalCachePath)
 
         let episodeSummary = try XCTUnwrap(summaries.first { $0.id == episode.id })
         XCTAssertEqual(episodeSummary.mediaType, .episode)

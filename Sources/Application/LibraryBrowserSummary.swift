@@ -37,6 +37,7 @@ public struct LibraryItemSummary: Identifiable, Sendable, Equatable {
     public let lastPlayedLabel: String?
     public let isFavorite: Bool
     public let tagLabels: [String]
+    public let selectedPosterLocalCachePath: String?
 
     public init(
         id: MediaItemID,
@@ -47,7 +48,8 @@ public struct LibraryItemSummary: Identifiable, Sendable, Equatable {
         metadataLabel: String,
         lastPlayedLabel: String?,
         isFavorite: Bool = false,
-        tagLabels: [String] = []
+        tagLabels: [String] = [],
+        selectedPosterLocalCachePath: String? = nil
     ) {
         self.id = id
         self.displayTitle = displayTitle
@@ -58,6 +60,7 @@ public struct LibraryItemSummary: Identifiable, Sendable, Equatable {
         self.lastPlayedLabel = lastPlayedLabel
         self.isFavorite = isFavorite
         self.tagLabels = tagLabels
+        self.selectedPosterLocalCachePath = selectedPosterLocalCachePath
     }
 }
 
@@ -215,7 +218,8 @@ struct LibraryItemSummaryMapper {
             metadataLabel: metadataLabel(for: summary),
             lastPlayedLabel: summary.latestPlayedAt.map(lastPlayedLabel),
             isFavorite: summary.isFavorite,
-            tagLabels: summary.tagLabels
+            tagLabels: summary.tagLabels,
+            selectedPosterLocalCachePath: summary.selectedPosterLocalCachePath
         )
     }
 

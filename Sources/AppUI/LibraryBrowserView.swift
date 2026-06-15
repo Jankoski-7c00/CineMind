@@ -1,105 +1,87 @@
 import Application
-import Domain
 import SwiftUI
 
 public struct LibraryBrowserView: View {
     @ObservedObject var viewModel: LibraryBrowserViewModel
+    @Binding private var presentationMode: LibraryBrowserPresentationMode
 
     public init(viewModel: LibraryBrowserViewModel) {
         self.viewModel = viewModel
+        _presentationMode = .constant(.grid)
+    }
+
+    init(
+        viewModel: LibraryBrowserViewModel,
+        presentationMode: Binding<LibraryBrowserPresentationMode>
+    ) {
+        self.viewModel = viewModel
+        _presentationMode = presentationMode
     }
 
     public var body: some View {
         VStack(spacing: 0) {
-            workflowHeader
+            browserStatusBar
             browserContent
         }
-        .background {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.035, green: 0.04, blue: 0.052),
-                    Color.black.opacity(0.96)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
+        .navigationTitle(browserTitle)
         .task(id: viewModel.loadTrigger) {
             await viewModel.load()
         }
     }
 
-    private var workflowHeader: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Library")
-                        .font(.title2.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.94))
+    private var browserTitle: String {
+        switch viewModel.selectedSection {
+        case .library:
+            "Library"
+        case .movies:
+            "Movies"
+        case .tvEpisodes:
+            "TV Episodes"
+        case .recentlyPlayed:
+            "Recently Played"
+        case .needsMetadata:
+            "Needs Metadata"
+        case .favorites:
+            "Favorites"
+        case .folders:
+            "Folders"
+        case .collection(let collectionID):
+            viewModel.curationSnapshot.collections
+                .first(where: { $0.id == collectionID })?
+                .name ?? "Collection"
+        }
+    }
 
-                    Text(browserSubtitle)
-                        .font(.callout)
-                        .cinemindSecondaryTextStyle(opacity: 0.62)
-                }
-
-                Spacer()
-
-                LiquidGlassPanel(
-                    cornerRadius: 18,
-                    material: .thinMaterial,
-                    padding: EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 12)
-                ) {
-                    HStack(spacing: 8) {
-                        Button {
-                            Task { await viewModel.addFolder() }
-                        } label: {
-                            Label("Add Folder", systemImage: "folder.badge.plus")
-                        }
-                        .buttonStyle(.liquidGlassPrimary)
-                        .disabled(workflowIsBusy)
-
-                        Button {
-                            Task { await viewModel.scanLibrary() }
-                        } label: {
-                            Label("Scan", systemImage: "arrow.clockwise")
-                        }
-                        .buttonStyle(.liquidGlass)
-                        .disabled(workflowIsBusy)
-
-                        workflowProgressLabel
-                    }
-                }
-            }
-
-            searchControls
-
-            if let workflowErrorMessage = viewModel.workflowErrorMessage {
-                Text(workflowErrorMessage)
-                    .font(.callout)
-                    .foregroundColor(.red)
+    private var browserStatusBar: some View {
+        HStack(spacing: 8) {
+            if viewModel.isAddingFolder {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Adding folder...")
+            } else if viewModel.isScanning {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Scanning library...")
+            } else if let workflowErrorMessage = viewModel.workflowErrorMessage {
+                Label(workflowErrorMessage, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red)
             } else if let workflowMessage = viewModel.workflowMessage {
-                Text(workflowMessage)
-                    .font(.caption)
-                    .cinemindSecondaryTextStyle()
+                Label(workflowMessage, systemImage: "checkmark.circle")
+            } else {
+                Text(browserSubtitle)
+                    .foregroundStyle(.secondary)
             }
+
+            Spacer()
 
             if let lastScanResult = viewModel.lastScanResult {
                 scanResultSummary(lastScanResult)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 16)
-        .padding(.bottom, 12)
-        .background {
-            LinearGradient(
-                colors: [
-                    Color.white.opacity(0.045),
-                    Color.clear
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
+        .font(.caption)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.bar)
     }
 
     private var workflowIsBusy: Bool {
@@ -137,136 +119,6 @@ public struct LibraryBrowserView: View {
         return "Local library"
     }
 
-    private var searchControls: some View {
-        LiquidGlassPanel(
-            cornerRadius: 14,
-            material: .thinMaterial,
-            padding: EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
-        ) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    searchField
-                        .frame(minWidth: 220)
-                    mediaTypePicker
-                        .frame(width: 190)
-                    availabilityPicker
-                        .frame(width: 130)
-                    favoritePicker
-                        .frame(width: 126)
-                    tagFilterPicker
-                        .frame(width: 150)
-                    sortPicker
-                        .frame(width: 170)
-                    clearSearchButton
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        searchField
-                        clearSearchButton
-                    }
-                    HStack(spacing: 8) {
-                        mediaTypePicker
-                        availabilityPicker
-                        favoritePicker
-                        tagFilterPicker
-                        sortPicker
-                    }
-                }
-            }
-        }
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Search Library", text: $viewModel.searchText)
-                .textFieldStyle(.plain)
-        }
-        .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private var mediaTypePicker: some View {
-        Picker("Type", selection: $viewModel.searchMediaTypeFilter) {
-            Text("All").tag(LibrarySearchMediaTypeFilter.all)
-            Text("Movies").tag(LibrarySearchMediaTypeFilter.movies)
-            Text("TV").tag(LibrarySearchMediaTypeFilter.tvEpisodes)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-    }
-
-    private var availabilityPicker: some View {
-        Picker("Availability", selection: $viewModel.searchAvailabilityFilter) {
-            Text("Any").tag(LibrarySearchAvailabilityFilter.any)
-            Text("Available").tag(LibrarySearchAvailabilityFilter.available)
-            Text("Missing").tag(LibrarySearchAvailabilityFilter.unavailable)
-        }
-        .pickerStyle(.menu)
-    }
-
-    private var favoritePicker: some View {
-        Picker("Favorite", selection: $viewModel.searchFavoriteFilter) {
-            Text("Any").tag(LibrarySearchFavoriteFilter.any)
-            Text("Favorites").tag(LibrarySearchFavoriteFilter.favoritesOnly)
-        }
-        .pickerStyle(.menu)
-    }
-
-    private var tagFilterPicker: some View {
-        Picker("Tag", selection: $viewModel.searchTagID) {
-            Text("Any Tag").tag(Optional<TagID>.none)
-            ForEach(viewModel.curationSnapshot.tags) { tag in
-                Text(tag.name).tag(Optional(tag.id))
-            }
-        }
-        .pickerStyle(.menu)
-        .disabled(viewModel.curationSnapshot.tags.isEmpty)
-    }
-
-    private var sortPicker: some View {
-        Picker("Sort", selection: $viewModel.searchSort) {
-            Text("Relevance").tag(LibrarySearchSort.relevance)
-            Text("Title").tag(LibrarySearchSort.title)
-            Text("Recently Added").tag(LibrarySearchSort.recentlyAdded)
-            Text("Recently Played").tag(LibrarySearchSort.recentlyPlayed)
-            Text("Year").tag(LibrarySearchSort.year)
-        }
-        .pickerStyle(.menu)
-    }
-
-    @ViewBuilder
-    private var clearSearchButton: some View {
-        if viewModel.isSearchActive {
-            Button {
-                viewModel.clearSearch()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Clear search")
-            .frame(width: 24, height: 24)
-        }
-    }
-
-    @ViewBuilder
-    private var workflowProgressLabel: some View {
-        if viewModel.isAddingFolder {
-            ProgressView("Adding...")
-                .controlSize(.small)
-                .font(.caption)
-        } else if viewModel.isScanning {
-            ProgressView("Scanning...")
-                .controlSize(.small)
-                .font(.caption)
-        }
-    }
-
     @ViewBuilder
     private var browserContent: some View {
         if viewModel.isLoading {
@@ -278,9 +130,20 @@ public struct LibraryBrowserView: View {
                   viewModel.selectedSection == .folders,
                   let folderSnapshot = viewModel.folderSnapshot,
                   !folderSnapshot.folders.isEmpty {
-            folderTableContent(folders: folderSnapshot.folders)
+            LibraryFolderTableView(folders: folderSnapshot.folders)
         } else if let items = displayedMediaItems, !items.isEmpty {
-            mediaTableContent(items: items)
+            switch presentationMode {
+            case .grid:
+                LibraryMediaPosterGridView(
+                    items: items,
+                    selectedItemID: $viewModel.selectedItemID
+                )
+            case .list:
+                LibraryMediaTableView(
+                    items: items,
+                    selectedItemID: $viewModel.selectedItemID
+                )
+            }
         } else {
             emptyContent
         }
@@ -302,38 +165,22 @@ public struct LibraryBrowserView: View {
     }
 
     private var emptyContent: some View {
-        LiquidGlassCard {
-            VStack(spacing: 12) {
-                Image(systemName: emptyStateIconName)
-                    .font(.system(size: 34, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.72))
-
-                Text(emptyStateTitle)
-                    .cinemindSectionTitleStyle()
-
-                Text(emptyStateMessage)
-                    .font(.callout)
-                    .cinemindSecondaryTextStyle()
-                    .multilineTextAlignment(.center)
-
-                if viewModel.isSearchActive {
-                    Button {
-                        viewModel.clearSearch()
-                    } label: {
-                        Label("Clear Search", systemImage: "xmark.circle")
-                    }
-                    .buttonStyle(.liquidGlass)
-                } else if emptyStateShowsAddFolderButton {
-                    Button {
-                        Task { await viewModel.addFolder() }
-                    } label: {
-                        Label("Add Folder", systemImage: "folder.badge.plus")
-                    }
-                    .buttonStyle(.liquidGlassPrimary)
-                    .disabled(workflowIsBusy)
+        ContentUnavailableView {
+            Label(emptyStateTitle, systemImage: emptyStateIconName)
+        } description: {
+            Text(emptyStateMessage)
+        } actions: {
+            if viewModel.isSearchActive {
+                Button("Clear Search", systemImage: "xmark.circle") {
+                    viewModel.clearSearch()
                 }
+            } else if emptyStateShowsAddFolderButton {
+                Button("Add Folder", systemImage: "folder.badge.plus") {
+                    Task { await viewModel.addFolder() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(workflowIsBusy)
             }
-            .frame(maxWidth: 340)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -394,194 +241,16 @@ public struct LibraryBrowserView: View {
     }
 
     private func errorContent(message: String) -> some View {
-        VStack(spacing: 12) {
-            Text("Failed to load")
-                .font(.headline)
+        ContentUnavailableView {
+            Label("Failed to Load", systemImage: "exclamationmark.triangle")
+        } description: {
             Text(message)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            Button("Retry") {
+        } actions: {
+            Button("Retry", systemImage: "arrow.clockwise") {
                 Task { await viewModel.load() }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func mediaTableContent(items: [LibraryItemSummary]) -> some View {
-        Table(of: LibraryItemSummary.self, selection: $viewModel.selectedItemID) {
-            TableColumn("Title") { item in
-                mediaTitleCell(item)
-            }
-            TableColumn("Type") { item in
-                tableStatusLabel(
-                    item.mediaTypeLabel,
-                    systemImage: item.mediaTypeLabel == "TV Episode" ? "tv" : "film",
-                    color: .secondary
-                )
-            }
-            TableColumn("Metadata") { item in
-                let descriptor = metadataDescriptor(item.metadataLabel)
-                tableStatusLabel(
-                    descriptor.title,
-                    systemImage: descriptor.systemImage,
-                    color: descriptor.color
-                )
-            }
-            TableColumn("Availability") { item in
-                let descriptor = availabilityDescriptor(item.availabilityLabel)
-                tableStatusLabel(
-                    descriptor.title,
-                    systemImage: descriptor.systemImage,
-                    color: descriptor.color
-                )
-            }
-            TableColumn("Last Played") { item in
-                Text(item.lastPlayedLabel ?? CineMindDisplayText.emptyValue)
-            }
-        } rows: {
-            ForEach(items) { item in
-                TableRow(item)
-            }
-        }
-    }
-
-    private func mediaTitleCell(_ item: LibraryItemSummary) -> some View {
-        HStack(spacing: 9) {
-            Image(systemName: item.isFavorite ? "star.fill" : mediaIconName(for: item))
-                .foregroundStyle(item.isFavorite ? Color.yellow : .secondary)
-                .frame(width: 18)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.displayTitle)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-
-                Text(mediaSubtitle(for: item))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
-        .padding(.vertical, 7)
-    }
-
-    private func mediaSubtitle(for item: LibraryItemSummary) -> String {
-        let availability = availabilityDescriptor(item.availabilityLabel).title
-        var parts: [String] = [item.mediaTypeLabel]
-        guard let yearOrEpisode = item.yearOrEpisodeLabel,
-              !yearOrEpisode.isEmpty else {
-            parts.append(availability)
-            if let tagSummary = tagSummary(for: item) {
-                parts.append(tagSummary)
-            }
-            return parts.joined(separator: " · ")
-        }
-
-        parts.append(yearOrEpisode)
-        parts.append(availability)
-        if let tagSummary = tagSummary(for: item) {
-            parts.append(tagSummary)
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func mediaIconName(for item: LibraryItemSummary) -> String {
-        item.mediaTypeLabel == "TV Episode" ? "tv" : "film"
-    }
-
-    private func tagSummary(for item: LibraryItemSummary) -> String? {
-        guard !item.tagLabels.isEmpty else {
-            return nil
-        }
-        let visible = item.tagLabels.prefix(2).joined(separator: ", ")
-        let remaining = item.tagLabels.count - 2
-        return remaining > 0 ? "\(visible) +\(remaining)" : visible
-    }
-
-    private func tableStatusLabel(
-        _ title: String,
-        systemImage: String,
-        color: Color
-    ) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: systemImage)
-                .imageScale(.small)
-            Text(title)
-                .lineLimit(1)
-        }
-        .font(.callout)
-        .foregroundStyle(color)
-    }
-
-    private func availabilityDescriptor(_ label: String) -> TableStatusDescriptor {
-        switch label.lowercased() {
-        case "available":
-            TableStatusDescriptor(title: "Available", systemImage: "checkmark.circle.fill", color: .green)
-        case "unavailable", "no files":
-            TableStatusDescriptor(title: "Missing File", systemImage: "xmark.circle.fill", color: .red)
-        case "partially available":
-            TableStatusDescriptor(title: "Partial", systemImage: "exclamationmark.circle.fill", color: .yellow)
-        default:
-            TableStatusDescriptor(
-                title: CineMindDisplayText.friendlyStatus(label),
-                systemImage: "info.circle",
-                color: .secondary
-            )
-        }
-    }
-
-    private func metadataDescriptor(_ label: String) -> TableStatusDescriptor {
-        switch label.lowercased() {
-        case "complete":
-            TableStatusDescriptor(title: "Matched", systemImage: "checkmark.seal.fill", color: .green)
-        case "partial":
-            TableStatusDescriptor(title: "Partial", systemImage: "exclamationmark.circle.fill", color: .yellow)
-        case "missing":
-            TableStatusDescriptor(title: "Needs Metadata", systemImage: "tag.fill", color: .accentColor)
-        default:
-            TableStatusDescriptor(
-                title: CineMindDisplayText.friendlyStatus(label),
-                systemImage: "tag",
-                color: .secondary
-            )
-        }
-    }
-
-    private struct TableStatusDescriptor {
-        let title: String
-        let systemImage: String
-        let color: Color
-    }
-
-    private func folderTableContent(folders: [LibraryFolderSummary]) -> some View {
-        Table(of: LibraryFolderSummary.self) {
-            TableColumn("Name") { folder in
-                Text(folder.displayName)
-            }
-            TableColumn("Path") { folder in
-                Text(folder.rootPath)
-            }
-            TableColumn("Availability") { folder in
-                let descriptor = availabilityDescriptor(folder.availabilityLabel)
-                tableStatusLabel(
-                    descriptor.title,
-                    systemImage: descriptor.systemImage,
-                    color: descriptor.color
-                )
-            }
-            TableColumn("Files") { folder in
-                Text(folder.fileCountLabel)
-            }
-            TableColumn("Last Seen") { folder in
-                Text(folder.lastSeenLabel ?? CineMindDisplayText.emptyValue)
-            }
-            TableColumn("Last Scan") { folder in
-                Text(folder.lastScanLabel ?? CineMindDisplayText.emptyValue)
-            }
-        } rows: {
-            ForEach(folders) { folder in
-                TableRow(folder)
-            }
-        }
-    }
 }
