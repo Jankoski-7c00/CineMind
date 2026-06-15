@@ -9,6 +9,7 @@
 DerivedData/
 xcuserdata/
 *.xcuserstate
+dist/
 
 # Local environment
 .env

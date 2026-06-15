@@ -18,7 +18,10 @@ struct LibraryBrowserToolbarContent: ToolbarContent {
             Button {
                 isInspectorPresented.toggle()
             } label: {
-                Label("Inspector", systemImage: "sidebar.right")
+                Label(
+                    isInspectorPresented ? "Hide Inspector" : "Show Inspector",
+                    systemImage: "sidebar.right"
+                )
             }
             .help(isInspectorPresented ? "Hide Inspector" : "Show Inspector")
 

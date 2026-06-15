@@ -4,18 +4,22 @@ import SwiftUI
 public struct LibraryBrowserView: View {
     @ObservedObject var viewModel: LibraryBrowserViewModel
     @Binding private var presentationMode: LibraryBrowserPresentationMode
+    private let onShowInspector: () -> Void
 
     public init(viewModel: LibraryBrowserViewModel) {
         self.viewModel = viewModel
         _presentationMode = .constant(.grid)
+        onShowInspector = {}
     }
 
     init(
         viewModel: LibraryBrowserViewModel,
-        presentationMode: Binding<LibraryBrowserPresentationMode>
+        presentationMode: Binding<LibraryBrowserPresentationMode>,
+        onShowInspector: @escaping () -> Void
     ) {
         self.viewModel = viewModel
         _presentationMode = presentationMode
+        self.onShowInspector = onShowInspector
     }
 
     public var body: some View {
@@ -136,12 +140,14 @@ public struct LibraryBrowserView: View {
             case .grid:
                 LibraryMediaPosterGridView(
                     items: items,
-                    selectedItemID: $viewModel.selectedItemID
+                    selectedItemID: $viewModel.selectedItemID,
+                    onShowInspector: onShowInspector
                 )
             case .list:
                 LibraryMediaTableView(
                     items: items,
-                    selectedItemID: $viewModel.selectedItemID
+                    selectedItemID: $viewModel.selectedItemID,
+                    onShowInspector: onShowInspector
                 )
             }
         } else {
@@ -161,7 +167,7 @@ public struct LibraryBrowserView: View {
             "\(CineMindDisplayText.friendlyStatus(result.statusLabel)): \(result.counts.filesDiscovered) files, \(result.counts.mediaItemsCreated) created, \(result.counts.mediaItemsUpdated) updated, \(result.counts.issuesRecorded) issues"
         )
         .font(.caption)
-        .cinemindSecondaryTextStyle()
+        .foregroundStyle(.secondary)
     }
 
     private var emptyContent: some View {

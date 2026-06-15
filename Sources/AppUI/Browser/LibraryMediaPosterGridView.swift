@@ -5,6 +5,7 @@ import SwiftUI
 struct LibraryMediaPosterGridView: View {
     let items: [LibraryItemSummary]
     @Binding var selectedItemID: MediaItemID?
+    let onShowInspector: () -> Void
 
     private let columns = [
         GridItem(.adaptive(minimum: 132, maximum: 190), spacing: 16)
@@ -46,9 +47,15 @@ struct LibraryMediaPosterGridView: View {
             Button("Show Details", systemImage: "info.circle") {
                 selectedItemID = item.id
             }
+            Button("Show Inspector", systemImage: "sidebar.right") {
+                selectedItemID = item.id
+                onShowInspector()
+            }
         }
         .accessibilityLabel(item.displayTitle)
         .accessibilityValue(accessibilityValue(for: item))
+        .accessibilityHint("Selects the item and shows its details")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func posterPlaceholder(

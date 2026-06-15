@@ -7,33 +7,32 @@ struct MediaDetailHeaderView: View {
     let posterImageState: PosterImageState
 
     var body: some View {
-        LiquidGlassPanel(cornerRadius: 22, material: .thinMaterial) {
-            HStack(alignment: .top, spacing: 22) {
-                posterView
+        HStack(alignment: .top, spacing: 22) {
+            posterView
 
-                VStack(alignment: .leading, spacing: 15) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(detail.displayTitle)
-                            .cinemindDetailTitleStyle()
-                            .lineLimit(3)
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(detail.displayTitle)
+                        .font(.largeTitle.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(3)
 
-                        subtitleLine
-                    }
-
-                    badgeRow
-
-                    Label(lastPlayedText, systemImage: "clock")
-                        .font(.callout)
-                        .cinemindSecondaryTextStyle(opacity: 0.72)
-
-                    Text(CineMindDisplayText.summary(detail.summary))
-                        .font(.body)
-                        .lineSpacing(3)
-                        .cinemindSecondaryTextStyle(opacity: detail.summary == nil ? 0.58 : 0.82)
-                        .lineLimit(6)
+                    subtitleLine
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                statusRow
+
+                Label(lastPlayedText, systemImage: "clock")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                Text(CineMindDisplayText.summary(detail.summary))
+                    .font(.body)
+                    .lineSpacing(3)
+                    .foregroundStyle(detail.summary == nil ? .secondary : .primary)
+                    .lineLimit(6)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -45,43 +44,68 @@ struct MediaDetailHeaderView: View {
                 .resizable()
                 .scaledToFill()
                 .frame(width: 168, height: 252)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(.white.opacity(0.18), lineWidth: 1)
-                }
-                .shadow(color: .black.opacity(0.45), radius: 18, y: 10)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         case .loading:
-            PosterPlaceholderView(title: "Loading Poster", isLoading: true)
-                .frame(width: 168, height: 252)
+            posterPlaceholder(title: "Loading Poster", isLoading: true)
         case .idle, .placeholder:
-            PosterPlaceholderView()
-                .frame(width: 168, height: 252)
+            posterPlaceholder(title: "No Poster", isLoading: false)
         }
     }
 
-    private var badgeRow: some View {
-        HStack(spacing: 8) {
-            LiquidGlassBadge(
-                detail.mediaTypeLabel,
+    private func posterPlaceholder(title: String, isLoading: Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.quaternary)
+
+            VStack(spacing: 8) {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.title2)
+                }
+                Text(title)
+                    .font(.caption)
+            }
+            .foregroundStyle(.secondary)
+        }
+        .frame(width: 168, height: 252)
+        .accessibilityLabel(title)
+    }
+
+    private var statusRow: some View {
+        HStack(spacing: 12) {
+            statusLabel(
+                title: detail.mediaTypeLabel,
                 systemImage: detail.mediaTypeLabel == "TV Episode" ? "tv" : "film",
-                variant: .neutral
+                color: .secondary
             )
 
-            let availability = availabilityBadge
-            LiquidGlassBadge(
-                availability.title,
+            let availability = availabilityStatus
+            statusLabel(
+                title: availability.title,
                 systemImage: availability.systemImage,
-                variant: availability.variant
+                color: availability.color
             )
 
-            let metadata = metadataBadge
-            LiquidGlassBadge(
-                metadata.title,
+            let metadata = metadataStatus
+            statusLabel(
+                title: metadata.title,
                 systemImage: metadata.systemImage,
-                variant: metadata.variant
+                color: metadata.color
             )
         }
+        .font(.caption)
+    }
+
+    private func statusLabel(
+        title: String,
+        systemImage: String,
+        color: Color
+    ) -> some View {
+        Label(title, systemImage: systemImage)
+            .foregroundStyle(color)
     }
 
     @ViewBuilder
@@ -89,13 +113,13 @@ struct MediaDetailHeaderView: View {
         if let yearOrEpisodeLabel = detail.yearOrEpisodeLabel,
            !yearOrEpisodeLabel.isEmpty {
             Text(yearOrEpisodeLabel)
-                .font(.title3.weight(.medium))
-                .cinemindSecondaryTextStyle(opacity: 0.70)
+                .font(.title3)
+                .foregroundStyle(.secondary)
                 .lineLimit(2)
         } else {
             Text(detail.mediaTypeLabel)
-                .font(.title3.weight(.medium))
-                .cinemindSecondaryTextStyle(opacity: 0.70)
+                .font(.title3)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -123,44 +147,52 @@ struct MediaDetailHeaderView: View {
         return "Last played on \(Self.dateFormatter.string(from: date)) at \(time)"
     }
 
-    private var availabilityBadge: BadgeDescriptor {
+    private var availabilityStatus: StatusDescriptor {
         switch detail.availabilityLabel.lowercased() {
         case "available":
-            BadgeDescriptor(title: "Available", systemImage: "checkmark.circle.fill", variant: .success)
+            StatusDescriptor(title: "Available", systemImage: "checkmark.circle.fill", color: .green)
         case "unavailable", "no files":
-            BadgeDescriptor(title: "Missing File", systemImage: "xmark.circle.fill", variant: .danger)
+            StatusDescriptor(title: "Missing File", systemImage: "xmark.circle.fill", color: .red)
         case "partially available":
-            BadgeDescriptor(title: "Partial Availability", systemImage: "exclamationmark.circle.fill", variant: .warning)
+            StatusDescriptor(
+                title: "Partial Availability",
+                systemImage: "exclamationmark.circle.fill",
+                color: .orange
+            )
         default:
-            BadgeDescriptor(
+            StatusDescriptor(
                 title: CineMindDisplayText.friendlyStatus(detail.availabilityLabel),
                 systemImage: "info.circle",
-                variant: .neutral
+                color: .secondary
             )
         }
     }
 
-    private var metadataBadge: BadgeDescriptor {
+    private var metadataStatus: StatusDescriptor {
         switch detail.metadataLabel.lowercased() {
         case "complete":
-            BadgeDescriptor(title: "Matched", systemImage: "checkmark.seal.fill", variant: .success)
+            StatusDescriptor(title: "Matched", systemImage: "checkmark.seal.fill", color: .green)
         case "partial":
-            BadgeDescriptor(title: "Partial Metadata", systemImage: "exclamationmark.circle.fill", variant: .warning)
+            StatusDescriptor(
+                title: "Partial Metadata",
+                systemImage: "exclamationmark.circle.fill",
+                color: .orange
+            )
         case "missing":
-            BadgeDescriptor(title: "Needs Metadata", systemImage: "tag.fill", variant: .accent)
+            StatusDescriptor(title: "Needs Metadata", systemImage: "tag.fill", color: .accentColor)
         default:
-            BadgeDescriptor(
+            StatusDescriptor(
                 title: CineMindDisplayText.friendlyStatus(detail.metadataLabel),
                 systemImage: "tag",
-                variant: .neutral
+                color: .secondary
             )
         }
     }
 
-    private struct BadgeDescriptor {
+    private struct StatusDescriptor {
         let title: String
         let systemImage: String
-        let variant: LiquidGlassBadge.Variant
+        let color: Color
     }
 
     private static let isoDateFormatter: ISO8601DateFormatter = {

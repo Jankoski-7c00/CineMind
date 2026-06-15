@@ -2,8 +2,56 @@ import Application
 import Domain
 import SwiftUI
 
+struct LibraryItemInspectorSnapshot {
+    let detail: LibraryItemDetailShell?
+    let detailState: DetailState
+    let playbackStatus: PlaybackApplicationStatus
+    let metadataActionStatus: MetadataActionStatus
+    let metadataCandidates: [LibraryMetadataCandidate]
+    let isSearchingMetadataCandidates: Bool
+    let curationActionStatus: CurationActionStatus
+    let subtitleActionStatus: SubtitleActionStatus
+    let subtitleCandidates: [LibrarySubtitleCandidate]
+    let isSearchingSubtitleCandidates: Bool
+    let downloadingSubtitleResultID: String?
+    let installedSubtitleResultIDs: Set<String>
+    let metadataActionsUnavailableMessage: String?
+    let subtitleActionsUnavailableMessage: String?
+    let metadataActionsAvailable: Bool
+    let curationActionsAvailable: Bool
+    let subtitleActionsAvailable: Bool
+    let subtitleTargetAvailable: Bool
+
+    @MainActor
+    init(viewModel: LibraryItemDetailViewModel) {
+        detail = viewModel.detail
+        detailState = viewModel.detailState
+        playbackStatus = viewModel.playbackStatus
+        metadataActionStatus = viewModel.metadataActionStatus
+        metadataCandidates = viewModel.metadataCandidates
+        isSearchingMetadataCandidates = viewModel.isSearchingMetadataCandidates
+        curationActionStatus = viewModel.curationActionStatus
+        subtitleActionStatus = viewModel.subtitleActionStatus
+        subtitleCandidates = viewModel.subtitleCandidates
+        isSearchingSubtitleCandidates = viewModel.isSearchingSubtitleCandidates
+        downloadingSubtitleResultID = viewModel.downloadingSubtitleResultID
+        installedSubtitleResultIDs = viewModel.installedSubtitleResultIDs
+        metadataActionsUnavailableMessage = viewModel.metadataActionsUnavailableMessage
+        subtitleActionsUnavailableMessage = viewModel.subtitleActionsUnavailableMessage
+        metadataActionsAvailable = viewModel.metadataActionsAvailable
+        curationActionsAvailable = viewModel.curationActionsAvailable
+        subtitleActionsAvailable = viewModel.subtitleActionsAvailable
+        subtitleTargetAvailable = viewModel.subtitleTargetAvailable
+    }
+}
+
+struct LibraryItemInspectorActions {
+    let viewModel: LibraryItemDetailViewModel
+}
+
 struct LibraryItemInspectorView: View {
-    @ObservedObject var viewModel: LibraryItemDetailViewModel
+    let snapshot: LibraryItemInspectorSnapshot
+    let actions: LibraryItemInspectorActions
     let curationSnapshot: LibraryCurationSnapshot
     @Binding var selectedSection: LibraryInspectorSection
 
@@ -26,53 +74,67 @@ struct LibraryItemInspectorView: View {
 
             Divider()
 
-            if let detail = viewModel.detail, viewModel.detailState == .loaded {
+            if let detail = snapshot.detail, snapshot.detailState == .loaded {
                 inspectorContent(detail)
             } else {
-                ContentUnavailableView(
-                    "No Selection",
-                    systemImage: "sidebar.right",
-                    description: Text("Select a media item to inspect its details.")
-                )
+                VStack(spacing: 8) {
+                    Image(systemName: "sidebar.right")
+                        .font(.title2)
+                    Text("No Selection")
+                        .font(.headline)
+                    Text("Select a media item to inspect its details.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .foregroundStyle(.secondary)
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }
-        .sheet(isPresented: $isRematchSheetPresented) {
-            metadataCandidateSheet
-        }
-        .sheet(isPresented: $isSubtitleSearchSheetPresented) {
-            subtitleCandidateSheet
         }
     }
 
     private var sectionPicker: some View {
-        Picker("Inspector Section", selection: $selectedSection) {
+        Menu {
             ForEach(LibraryInspectorSection.allCases) { section in
-                Label(section.title, systemImage: section.systemImage)
-                    .tag(section)
+                Button {
+                    selectedSection = section
+                } label: {
+                    Label(section.title, systemImage: section.systemImage)
+                }
             }
+        } label: {
+            Label(selectedSection.title, systemImage: selectedSection.systemImage)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .pickerStyle(.menu)
-        .labelsHidden()
+        .menuStyle(.borderlessButton)
+        .help("Choose Inspector Section")
     }
 
     @ViewBuilder
     private func inspectorContent(_ detail: LibraryItemDetailShell) -> some View {
         switch selectedSection {
         case .info:
-            infoForm(detail)
+            infoList(detail)
         case .organize:
-            organizeForm(detail.curation)
+            organizeList(detail.curation)
         case .files:
-            filesForm(detail.files)
+            filesList(detail.files)
         case .subtitles:
-            subtitlesForm
+            subtitlesList
+                .sheet(isPresented: $isSubtitleSearchSheetPresented) {
+                    subtitleCandidateSheet
+                }
         case .advancedMetadata:
-            advancedMetadataForm(detail)
+            advancedMetadataList(detail)
+                .sheet(isPresented: $isRematchSheetPresented) {
+                    metadataCandidateSheet
+                }
         }
     }
 
-    private func infoForm(_ detail: LibraryItemDetailShell) -> some View {
-        Form {
+    private func infoList(_ detail: LibraryItemDetailShell) -> some View {
+        List {
             Section("Overview") {
                 LabeledContent("Title", value: detail.displayTitle)
                 LabeledContent("Type", value: detail.mediaTypeLabel)
@@ -99,20 +161,20 @@ struct LibraryItemInspectorView: View {
                 LabeledContent("Release Date", value: displayValue(metadata.releaseOrAirDateLabel))
             }
         }
-        .formStyle(.grouped)
+        .listStyle(.inset)
     }
 
-    private func organizeForm(_ curation: LibraryItemCurationDetail) -> some View {
-        Form {
+    private func organizeList(_ curation: LibraryItemCurationDetail) -> some View {
+        List {
             Section {
                 Toggle(
                     "Favorite",
                     isOn: Binding(
                         get: { curation.isFavorite },
-                        set: { viewModel.setFavorite($0) }
+                        set: { actions.viewModel.setFavorite($0) }
                     )
                 )
-                .disabled(!viewModel.curationActionsAvailable)
+                .disabled(!snapshot.curationActionsAvailable)
 
                 curationActionStatusView
             }
@@ -127,7 +189,7 @@ struct LibraryItemInspectorView: View {
                 createRow(placeholder: "New Tag", text: $newTagName) {
                     let name = newTagName
                     newTagName = ""
-                    viewModel.createAndAssignTag(name: name)
+                    actions.viewModel.createAndAssignTag(name: name)
                 }
 
                 if let editingTagID {
@@ -142,7 +204,7 @@ struct LibraryItemInspectorView: View {
                             let name = editingTagName
                             self.editingTagID = nil
                             editingTagName = ""
-                            viewModel.renameTag(tagID: editingTagID, name: name)
+                            actions.viewModel.renameTag(tagID: editingTagID, name: name)
                         }
                     )
                 }
@@ -158,7 +220,7 @@ struct LibraryItemInspectorView: View {
                 createRow(placeholder: "New Collection", text: $newCollectionName) {
                     let name = newCollectionName
                     newCollectionName = ""
-                    viewModel.createAndAddCollection(name: name)
+                    actions.viewModel.createAndAddCollection(name: name)
                 }
 
                 if let editingCollectionID {
@@ -173,7 +235,7 @@ struct LibraryItemInspectorView: View {
                             let name = editingCollectionName
                             self.editingCollectionID = nil
                             editingCollectionName = ""
-                            viewModel.renameCollection(
+                            actions.viewModel.renameCollection(
                                 collectionID: editingCollectionID,
                                 name: name
                             )
@@ -182,11 +244,11 @@ struct LibraryItemInspectorView: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .listStyle(.inset)
     }
 
-    private func filesForm(_ files: [LibraryFileSummary]) -> some View {
-        Form {
+    private func filesList(_ files: [LibraryFileSummary]) -> some View {
+        List {
             if files.isEmpty {
                 Section {
                     Text("No files")
@@ -211,20 +273,20 @@ struct LibraryItemInspectorView: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .listStyle(.inset)
     }
 
-    private var subtitlesForm: some View {
-        Form {
+    private var subtitlesList: some View {
+        List {
             Section("Online Search") {
-                if viewModel.subtitleActionsAvailable {
+                if snapshot.subtitleActionsAvailable {
                     Button("Search Online", systemImage: "magnifyingglass") {
                         isSubtitleSearchSheetPresented = true
-                        viewModel.searchSubtitleCandidates()
+                        actions.viewModel.searchSubtitleCandidates()
                     }
-                    .disabled(!viewModel.subtitleTargetAvailable)
+                    .disabled(!snapshot.subtitleTargetAvailable)
 
-                    if !viewModel.subtitleTargetAvailable {
+                    if !snapshot.subtitleTargetAvailable {
                         Text("A playable local file is required.")
                             .foregroundStyle(.secondary)
                     }
@@ -232,7 +294,7 @@ struct LibraryItemInspectorView: View {
                     subtitleActionStatusView
                 } else {
                     Label(
-                        viewModel.subtitleActionsUnavailableMessage
+                        snapshot.subtitleActionsUnavailableMessage
                             ?? "Subtitle search is not configured. Local and embedded subtitles remain available.",
                         systemImage: "exclamationmark.circle"
                     )
@@ -240,24 +302,24 @@ struct LibraryItemInspectorView: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .listStyle(.inset)
     }
 
-    private func advancedMetadataForm(_ detail: LibraryItemDetailShell) -> some View {
-        Form {
+    private func advancedMetadataList(_ detail: LibraryItemDetailShell) -> some View {
+        List {
             Section("Actions") {
-                if viewModel.metadataActionsAvailable {
+                if snapshot.metadataActionsAvailable {
                     Button("Refresh Metadata", systemImage: "arrow.clockwise") {
-                        viewModel.refreshMetadata()
+                        actions.viewModel.refreshMetadata()
                     }
                     Button("Search Matches", systemImage: "magnifyingglass") {
                         isRematchSheetPresented = true
-                        viewModel.searchMetadataCandidates()
+                        actions.viewModel.searchMetadataCandidates()
                     }
                     metadataActionStatusView
                 } else {
                     Label(
-                        viewModel.metadataActionsUnavailableMessage
+                        snapshot.metadataActionsUnavailableMessage
                             ?? "Open CineMind Settings to configure online metadata matching.",
                         systemImage: "exclamationmark.circle"
                     )
@@ -289,7 +351,7 @@ struct LibraryItemInspectorView: View {
             metadataSourceSection(detail.metadataDetail.source)
             posterAssetsSection(detail.posterAssets)
         }
-        .formStyle(.grouped)
+        .listStyle(.inset)
         .onAppear {
             syncOverrideDrafts(from: detail.metadataDetail)
         }
@@ -307,12 +369,12 @@ struct LibraryItemInspectorView: View {
             } else {
                 ForEach(availableTags) { tag in
                     Button(tag.name) {
-                        viewModel.assignTag(tagID: tag.id)
+                        actions.viewModel.assignTag(tagID: tag.id)
                     }
                 }
             }
         }
-        .disabled(!viewModel.curationActionsAvailable || availableTags.isEmpty)
+        .disabled(!snapshot.curationActionsAvailable || availableTags.isEmpty)
     }
 
     private func tagRow(_ tag: LibraryTagSummary) -> some View {
@@ -320,7 +382,7 @@ struct LibraryItemInspectorView: View {
             Label(tag.name, systemImage: "tag")
             Spacer()
             Button("Remove", systemImage: "xmark.circle") {
-                viewModel.removeTag(tagID: tag.id)
+                actions.viewModel.removeTag(tagID: tag.id)
             }
             .labelStyle(.iconOnly)
             .help("Remove Tag")
@@ -331,10 +393,11 @@ struct LibraryItemInspectorView: View {
                     editingTagName = tag.name
                 }
                 Button("Delete", role: .destructive) {
-                    viewModel.deleteTag(tagID: tag.id)
+                    actions.viewModel.deleteTag(tagID: tag.id)
                 }
             }
             .labelStyle(.iconOnly)
+            .help("Tag Actions")
         }
     }
 
@@ -351,12 +414,12 @@ struct LibraryItemInspectorView: View {
             } else {
                 ForEach(availableCollections) { collection in
                     Button(collection.name) {
-                        viewModel.addToCollection(collectionID: collection.id)
+                        actions.viewModel.addToCollection(collectionID: collection.id)
                     }
                 }
             }
         }
-        .disabled(!viewModel.curationActionsAvailable || availableCollections.isEmpty)
+        .disabled(!snapshot.curationActionsAvailable || availableCollections.isEmpty)
     }
 
     private func collectionRow(_ collection: LibraryCollectionSummary) -> some View {
@@ -364,7 +427,7 @@ struct LibraryItemInspectorView: View {
             Label(collection.name, systemImage: "rectangle.stack")
             Spacer()
             Button("Remove", systemImage: "xmark.circle") {
-                viewModel.removeFromCollection(collectionID: collection.id)
+                actions.viewModel.removeFromCollection(collectionID: collection.id)
             }
             .labelStyle(.iconOnly)
             .help("Remove from Collection")
@@ -375,10 +438,11 @@ struct LibraryItemInspectorView: View {
                     editingCollectionName = collection.name
                 }
                 Button("Delete", role: .destructive) {
-                    viewModel.deleteCollection(collectionID: collection.id)
+                    actions.viewModel.deleteCollection(collectionID: collection.id)
                 }
             }
             .labelStyle(.iconOnly)
+            .help("Collection Actions")
         }
     }
 
@@ -394,7 +458,7 @@ struct LibraryItemInspectorView: View {
                 .help("Add")
                 .disabled(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .disabled(!viewModel.curationActionsAvailable)
+        .disabled(!snapshot.curationActionsAvailable)
     }
 
     private func editRow(
@@ -423,14 +487,14 @@ struct LibraryItemInspectorView: View {
     private func filePlaybackButton(_ file: LibraryFileSummary) -> some View {
         let state = LibraryFilePlaybackPresentation.buttonState(
             for: file,
-            playbackStatus: viewModel.playbackStatus
+            playbackStatus: snapshot.playbackStatus
         )
         return Button(state.title, systemImage: state.systemImage) {
             switch state {
             case .play:
-                viewModel.playFile(mediaFileID: file.mediaFileID)
+                actions.viewModel.playFile(mediaFileID: file.mediaFileID)
             case .resume:
-                viewModel.resumePlayback()
+                actions.viewModel.resumePlayback()
             case .disabled:
                 break
             }
@@ -451,14 +515,14 @@ struct LibraryItemInspectorView: View {
             TextField(label, text: text)
             HStack {
                 Button("Save", systemImage: "checkmark") {
-                    viewModel.setMetadataOverride(field: field, value: text.wrappedValue)
+                    actions.viewModel.setMetadataOverride(field: field, value: text.wrappedValue)
                 }
                 Button("Clear", systemImage: "xmark.circle") {
-                    viewModel.clearMetadataOverride(field: field)
+                    actions.viewModel.clearMetadataOverride(field: field)
                 }
                 .disabled(!isLocked)
             }
-            .disabled(!viewModel.metadataActionsAvailable)
+            .disabled(!snapshot.metadataActionsAvailable)
         }
     }
 
@@ -495,9 +559,9 @@ struct LibraryItemInspectorView: View {
                             Spacer()
                             if !asset.isSelected {
                                 Button("Select") {
-                                    viewModel.selectPoster(posterAssetID: asset.id)
+                                    actions.viewModel.selectPoster(posterAssetID: asset.id)
                                 }
-                                .disabled(!viewModel.metadataActionsAvailable)
+                                .disabled(!snapshot.metadataActionsAvailable)
                             }
                         }
                         Text(asset.remotePath)
@@ -515,7 +579,7 @@ struct LibraryItemInspectorView: View {
 
     @ViewBuilder
     private var curationActionStatusView: some View {
-        switch viewModel.curationActionStatus {
+        switch snapshot.curationActionStatus {
         case .idle:
             EmptyView()
         case .loading(let message):
@@ -531,7 +595,7 @@ struct LibraryItemInspectorView: View {
 
     @ViewBuilder
     private var subtitleActionStatusView: some View {
-        switch viewModel.subtitleActionStatus {
+        switch snapshot.subtitleActionStatus {
         case .idle:
             EmptyView()
         case .loading(let message):
@@ -547,7 +611,7 @@ struct LibraryItemInspectorView: View {
 
     @ViewBuilder
     private var metadataActionStatusView: some View {
-        switch viewModel.metadataActionStatus {
+        switch snapshot.metadataActionStatus {
         case .idle:
             EmptyView()
         case .loading(let message):
@@ -572,20 +636,20 @@ struct LibraryItemInspectorView: View {
     private var metadataCandidateSheet: some View {
         NavigationStack {
             Group {
-                if viewModel.isSearchingMetadataCandidates {
+                if snapshot.isSearchingMetadataCandidates {
                     ProgressView("Searching...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if viewModel.metadataCandidates.isEmpty {
+                } else if snapshot.metadataCandidates.isEmpty {
                     ContentUnavailableView(
                         "No Matches",
                         systemImage: "magnifyingglass",
                         description: Text("No metadata matches were found.")
                     )
                 } else {
-                    List(viewModel.metadataCandidates) { candidate in
+                    List(snapshot.metadataCandidates) { candidate in
                         Button {
                             isRematchSheetPresented = false
-                            viewModel.rematchMetadata(providerID: candidate.providerID)
+                            actions.viewModel.rematchMetadata(providerID: candidate.providerID)
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(candidate.title)
@@ -616,17 +680,17 @@ struct LibraryItemInspectorView: View {
     private var subtitleCandidateSheet: some View {
         NavigationStack {
             Group {
-                if viewModel.isSearchingSubtitleCandidates {
+                if snapshot.isSearchingSubtitleCandidates {
                     ProgressView("Searching...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if viewModel.subtitleCandidates.isEmpty {
+                } else if snapshot.subtitleCandidates.isEmpty {
                     ContentUnavailableView(
                         "No Subtitles",
                         systemImage: "captions.bubble",
                         description: Text("No subtitle candidates were found.")
                     )
                 } else {
-                    List(viewModel.subtitleCandidates) { candidate in
+                    List(snapshot.subtitleCandidates) { candidate in
                         subtitleCandidateRow(candidate)
                     }
                 }
@@ -655,14 +719,14 @@ struct LibraryItemInspectorView: View {
                 }
             }
             Spacer()
-            let isInstalled = viewModel.installedSubtitleResultIDs.contains(candidate.resultID)
+            let isInstalled = snapshot.installedSubtitleResultIDs.contains(candidate.resultID)
             Button(isInstalled ? "Installed" : "Download") {
-                viewModel.downloadSubtitle(resultID: candidate.resultID)
+                actions.viewModel.downloadSubtitle(resultID: candidate.resultID)
             }
             .disabled(
                 !candidate.isDownloadable
                     || isInstalled
-                    || viewModel.downloadingSubtitleResultID != nil
+                    || snapshot.downloadingSubtitleResultID != nil
             )
         }
     }

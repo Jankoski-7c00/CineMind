@@ -37,105 +37,60 @@ public struct LibraryItemDetailView: View {
     }
 
     private var emptyContent: some View {
-        Text("Select an item")
-            .foregroundColor(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ContentUnavailableView(
+            "No Selection",
+            systemImage: "film.stack",
+            description: Text("Select a media item to view its details.")
+        )
     }
 
     private var notFoundContent: some View {
-        Text("Item not found")
-            .foregroundColor(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ContentUnavailableView(
+            "Item Not Found",
+            systemImage: "questionmark.folder",
+            description: Text("The selected media item is no longer available.")
+        )
     }
 
     private func errorContent(message: String) -> some View {
-        VStack(spacing: 12) {
-            Text("Failed to load detail")
-                .font(.headline)
+        ContentUnavailableView {
+            Label("Failed to Load Detail", systemImage: "exclamationmark.triangle")
+        } description: {
             Text(message)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            Button("Retry") {
+        } actions: {
+            Button("Retry", systemImage: "arrow.clockwise") {
                 viewModel.retry()
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func detailContent(_ detail: LibraryItemDetailShell) -> some View {
-        ZStack {
-            detailBackdrop
-                .allowsHitTesting(false)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                MediaDetailHeaderView(
+                    detail: detail,
+                    posterImageState: viewModel.posterImageState
+                )
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    MediaDetailHeaderView(
-                        detail: detail,
-                        posterImageState: viewModel.posterImageState
-                    )
+                LibraryDetailPrimaryActionSection(
+                    files: detail.files,
+                    playbackStatus: viewModel.playbackStatus,
+                    onPlay: { viewModel.playFile(mediaFileID: $0) },
+                    onResume: { viewModel.resumePlayback() }
+                )
 
-                    LibraryDetailPrimaryActionSection(
-                        files: detail.files,
-                        playbackStatus: viewModel.playbackStatus,
-                        onPlay: { viewModel.playFile(mediaFileID: $0) },
-                        onResume: { viewModel.resumePlayback() }
-                    )
-
-                    playbackBlock(for: detail)
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 24)
-                .safeAreaPadding(.top, 20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .id(detail.id)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                .animation(.easeOut(duration: 0.18), value: detail.id)
+                playbackBlock(for: detail)
             }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .id(detail.id)
         }
-    }
-
-    private var detailBackdrop: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color.black,
-                    Color(red: 0.06, green: 0.075, blue: 0.105),
-                    Color(red: 0.015, green: 0.018, blue: 0.026),
-                    Color.black
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            RadialGradient(
-                colors: [
-                    Color(red: 0.28, green: 0.34, blue: 0.46).opacity(0.20),
-                    .clear
-                ],
-                center: .topTrailing,
-                startRadius: 20,
-                endRadius: 460
-            )
-
-            RadialGradient(
-                colors: [
-                    Color.accentColor.opacity(0.12),
-                    .clear
-                ],
-                center: .bottomLeading,
-                startRadius: 30,
-                endRadius: 560
-            )
-
-            Color.black.opacity(0.30)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
     private func playbackBlock(for detail: LibraryItemDetailShell) -> some View {
         if let status = playbackStatus(for: detail) {
-            LiquidGlassCard("Playback", systemImage: "play.rectangle") {
+            GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
                     if let playbackSurface {
                         ZStack(alignment: .bottom) {
@@ -220,6 +175,8 @@ public struct LibraryItemDetailView: View {
                         .foregroundColor(.secondary)
                     }
                 }
+            } label: {
+                Label("Playback", systemImage: "play.rectangle")
             }
             .onChange(of: status.positionMS) { _, newPositionMS in
                 guard !isScrubbing else { return }

@@ -5,6 +5,7 @@ import SwiftUI
 struct LibraryMediaTableView: View {
     let items: [LibraryItemSummary]
     @Binding var selectedItemID: MediaItemID?
+    let onShowInspector: () -> Void
 
     var body: some View {
         Table(of: LibraryItemSummary.self, selection: $selectedItemID) {
@@ -61,6 +62,10 @@ struct LibraryMediaTableView: View {
         .contextMenu {
             Button("Show Details", systemImage: "info.circle") {
                 selectedItemID = item.id
+            }
+            Button("Show Inspector", systemImage: "sidebar.right") {
+                selectedItemID = item.id
+                onShowInspector()
             }
         }
     }

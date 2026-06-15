@@ -1,3 +1,4 @@
+import Application
 import SwiftUI
 
 public struct CineMindRootView: View {
@@ -71,10 +72,12 @@ fileprivate struct ReadyShellView: View {
     @StateObject private var browserViewModel: LibraryBrowserViewModel
     @StateObject private var detailViewModel: LibraryItemDetailViewModel
     @ObservedObject private var metadataActionsState: LibraryMetadataActionsState
+    private let inspectorActions: LibraryItemInspectorActions
+    @State private var inspectorSnapshot: LibraryItemInspectorSnapshot
+    @State private var inspectorCurationSnapshot: LibraryCurationSnapshot
     @SceneStorage("CineMind.libraryBrowserPresentationMode")
     private var browserPresentationModeRawValue = LibraryBrowserPresentationMode.grid.rawValue
-    @SceneStorage("CineMind.isInspectorPresented")
-    private var isInspectorPresented = false
+    @State private var isInspectorPresented = false
     @SceneStorage("CineMind.inspectorSection")
     private var inspectorSectionRawValue = LibraryInspectorSection.info.rawValue
 
@@ -108,6 +111,11 @@ fileprivate struct ReadyShellView: View {
                 }
             ))
         _detailViewModel = StateObject(wrappedValue: detailViewModel)
+        inspectorActions = LibraryItemInspectorActions(viewModel: detailViewModel)
+        _inspectorSnapshot = State(
+            initialValue: LibraryItemInspectorSnapshot(viewModel: detailViewModel)
+        )
+        _inspectorCurationSnapshot = State(initialValue: .empty)
     }
 
     var body: some View {
@@ -122,7 +130,10 @@ fileprivate struct ReadyShellView: View {
         } content: {
             LibraryBrowserView(
                 viewModel: browserViewModel,
-                presentationMode: browserPresentationMode
+                presentationMode: browserPresentationMode,
+                onShowInspector: {
+                    isInspectorPresented = true
+                }
             )
         } detail: {
             LibraryItemDetailView(
@@ -147,6 +158,15 @@ fileprivate struct ReadyShellView: View {
                         unavailableMessage: metadataActionsState.unavailableMessage
                     )
                 }
+                .inspector(isPresented: $isInspectorPresented) {
+                    LibraryItemInspectorView(
+                        snapshot: inspectorSnapshot,
+                        actions: inspectorActions,
+                        curationSnapshot: inspectorCurationSnapshot,
+                        selectedSection: inspectorSection
+                    )
+                    .inspectorColumnWidth(min: 280, ideal: 340, max: 440)
+                }
         }
         .searchable(
             text: $browserViewModel.searchText,
@@ -160,15 +180,19 @@ fileprivate struct ReadyShellView: View {
                 isInspectorPresented: $isInspectorPresented
             )
         }
-        .inspector(isPresented: $isInspectorPresented) {
-            LibraryItemInspectorView(
-                viewModel: detailViewModel,
-                curationSnapshot: browserViewModel.curationSnapshot,
-                selectedSection: inspectorSection
-            )
-            .inspectorColumnWidth(min: 280, ideal: 340, max: 440)
+        .focusedSceneValue(\.libraryCommandActions, libraryCommandActions)
+        .onReceive(detailViewModel.objectWillChange) { _ in
+            Task { @MainActor in
+                await Task.yield()
+                inspectorSnapshot = LibraryItemInspectorSnapshot(viewModel: detailViewModel)
+            }
         }
-        .focusedValue(\.libraryCommandActions, libraryCommandActions)
+        .onReceive(browserViewModel.objectWillChange) { _ in
+            Task { @MainActor in
+                await Task.yield()
+                inspectorCurationSnapshot = browserViewModel.curationSnapshot
+            }
+        }
     }
 
     private var browserPresentationMode: Binding<LibraryBrowserPresentationMode> {
@@ -191,7 +215,6 @@ fileprivate struct ReadyShellView: View {
 
     private var libraryCommandActions: LibraryCommandActions {
         let presentationMode = browserPresentationMode
-        let inspectorPresented = $isInspectorPresented
         let workflowIsBusy = browserViewModel.isAddingFolder || browserViewModel.isScanning
         let canTogglePresentation = browserViewModel.selectedSection != .folders
             || browserViewModel.isSearchActive
@@ -213,7 +236,7 @@ fileprivate struct ReadyShellView: View {
                     : .grid
             },
             toggleInspector: {
-                inspectorPresented.wrappedValue.toggle()
+                isInspectorPresented.toggle()
             }
         )
     }
